@@ -823,10 +823,6 @@
         }
       }
     },
-    "show-volume-slider": {
-      "description": "Keeps the volume slider always visible instead of auto-hiding",
-      "name": "Show Volume Slider"
-    },
     "skip-disliked-songs": {
       "description": "Skips disliked songs",
       "name": "Skip Disliked Songs"
