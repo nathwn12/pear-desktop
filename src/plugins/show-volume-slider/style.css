@@ -2,5 +2,4 @@ body.show-volume-slider #volume-slider,
 body.show-volume-slider #expand-volume-slider {
   opacity: 1 !important;
   visibility: visible !important;
-  pointer-events: auto !important;
 }
