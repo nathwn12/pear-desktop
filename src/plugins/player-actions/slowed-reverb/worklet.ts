@@ -31,11 +31,14 @@ export const DATTORRO_WORKLET_SOURCE: string = `class DelayLine {
 class DattorroReverbProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    this.disposed = false;
     this.port.onmessage = (e) => this.handleMessage(e.data);
     this.init();
   }
 
   handleMessage(data) {
+    if (data.type === 'dispose') { this.disposed = true; return; }
+    if (this.disposed) return;
     if (data.type === 'reset') {
       this.init();
       return;
@@ -134,6 +137,7 @@ class DattorroReverbProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs, outputs) {
+    if (this.disposed) return false;
     const inp = inputs[0];
     const out = outputs[0];
     if (!inp || !inp.length || !out || !out.length) return true;

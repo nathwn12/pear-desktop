@@ -825,6 +825,7 @@
         "status-need-start": "Set a From or To time to start looping",
         "status-off": "Repeat is off",
         "status-saved": "Saved for this song",
+        "status-save-failed": "Could not save this section. Try again.",
         "status-saved-removed": "Saved section removed",
         "status-to-end": "Looping {{start}} → end of song",
         "title": "Section Repeat",

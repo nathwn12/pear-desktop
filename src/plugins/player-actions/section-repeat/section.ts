@@ -16,7 +16,7 @@ export interface SectionCallbacks {
   getCurrentTime: () => number | null;
 }
 
-export type SectionNotice = 'saved' | 'removed';
+export type SectionNotice = 'saved' | 'removed' | 'failed';
 
 export interface SectionHandle {
   root: HTMLElement;
@@ -157,9 +157,13 @@ export function createSection(
   };
 
   const paintStatus = (state: LoopState, invalid: boolean): void => {
-    status.classList.toggle(STATUS_ERROR_CLASS, invalid);
+    status.classList.toggle(STATUS_ERROR_CLASS, invalid || notice === 'failed');
     if (invalid) {
       status.textContent = t('plugins.section-repeat.panel.status-invalid');
+      return;
+    }
+    if (notice === 'failed') {
+      status.textContent = t('plugins.section-repeat.panel.status-save-failed');
       return;
     }
     if (notice === 'saved') {

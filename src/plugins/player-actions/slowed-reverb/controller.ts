@@ -104,7 +104,30 @@ function restorePitch(video: HTMLVideoElement, saved: SavedPitch): void {
   }
 }
 
+/**
+ * Retires a worklet node: tell the processor to stop, detach it, and close its
+ * port so the audio thread and message channel are both released.
+ */
+function retireWorklet(node: AudioWorkletNode): void {
+  try {
+    node.port.postMessage({ type: 'dispose' });
+  } catch {
+    /* Already gone. */
+  }
+  try {
+    node.disconnect();
+  } catch {
+    /* Already detached. */
+  }
+  try {
+    node.port.close();
+  } catch {
+    /* Already closed. */
+  }
+}
+
 export interface SlowedReverbController {
+  generation: number;
   ctx: FeatureContext<SlowedReverbConfig> | null;
   config: SlowedReverbConfig | null;
   audioContext: AudioContext | null;
@@ -156,6 +179,7 @@ export interface SlowedReverbController {
 
 export function createSlowedReverbController(): SlowedReverbController {
   return {
+    generation: 0,
     ctx: null,
     config: null,
     audioContext: null,
@@ -180,8 +204,10 @@ export function createSlowedReverbController(): SlowedReverbController {
     lastWetGain: 0,
 
     async start(ctx) {
+      const generation = ++this.generation;
       this.ctx = ctx;
       const raw = await ctx.getConfig();
+      if (generation !== this.generation || this.ctx !== ctx) return;
       const normalized = normalize(raw);
       this.config = {
         ...raw,
@@ -189,6 +215,7 @@ export function createSlowedReverbController(): SlowedReverbController {
         reverbIntensity: normalized.reverbIntensity,
       };
       this.audioHandler = (event: Event) => {
+        if (generation !== this.generation) return;
         this.handleAudioEvent(event);
       };
       this.claimRateIfEngaged();
@@ -217,6 +244,7 @@ export function createSlowedReverbController(): SlowedReverbController {
         this.audioHandler = null;
       }
       unregisterPlayerPanelSection(PLUGIN_ID);
+      this.generation += 1;
       // Cleared after the unregister, and directly rather than via
       // syncWatchdog(), for two reasons: the section's destroy flushes a
       // pending wheel debounce, whose onSlowCommit -> syncWatchdog() would
@@ -279,6 +307,7 @@ export function createSlowedReverbController(): SlowedReverbController {
 
     ensureSection() {
       if (this.section) return;
+      const generation = this.generation;
       const current = this.getCurrent();
       const handle = createSlowedReverbSection(
         {
@@ -288,6 +317,7 @@ export function createSlowedReverbController(): SlowedReverbController {
         },
         {
           onActiveChange: (active: boolean) => {
+            if (generation !== this.generation) return;
             this.config = { ...this.getCurrent(), active };
             this.ctx?.setConfig({ active });
             this.claimRateIfEngaged();
@@ -298,12 +328,14 @@ export function createSlowedReverbController(): SlowedReverbController {
             this.syncSection();
           },
           onSlowLive: (value: number) => {
+            if (generation !== this.generation) return;
             this.config = { ...this.getCurrent(), slow: value };
             this.claimRateIfEngaged();
             this.applySlow();
             this.syncWatchdog();
           },
           onSlowCommit: (value: number) => {
+            if (generation !== this.generation) return;
             this.config = { ...this.getCurrent(), slow: value };
             this.ctx?.setConfig({ slow: value });
             this.claimRateIfEngaged();
@@ -312,11 +344,13 @@ export function createSlowedReverbController(): SlowedReverbController {
             this.syncSection();
           },
           onReverbLive: (value: number) => {
+            if (generation !== this.generation) return;
             this.config = { ...this.getCurrent(), reverbIntensity: value };
             this.syncWetTap();
             this.applyReverb();
           },
           onReverbCommit: (value: number) => {
+            if (generation !== this.generation) return;
             this.config = { ...this.getCurrent(), reverbIntensity: value };
             this.ctx?.setConfig({ reverbIntensity: value });
             this.syncWetTap();
@@ -324,6 +358,7 @@ export function createSlowedReverbController(): SlowedReverbController {
             this.syncSection();
           },
           onReset: () => {
+            if (generation !== this.generation) return;
             this.config = {
               ...this.getCurrent(),
               slow: 1,
@@ -505,9 +540,7 @@ export function createSlowedReverbController(): SlowedReverbController {
           this.wiredSource !== audioSource ||
           this.reverbNode
         ) {
-          try {
-            node.disconnect();
-          } catch {}
+          retireWorklet(node);
           return;
         }
         audioSource.connect(node);
@@ -731,9 +764,7 @@ export function createSlowedReverbController(): SlowedReverbController {
       try {
         if (source && this.reverbNode) source.disconnect(this.reverbNode);
       } catch {}
-      try {
-        this.reverbNode?.disconnect();
-      } catch {}
+      if (this.reverbNode) retireWorklet(this.reverbNode);
       try {
         this.wetGain?.disconnect();
       } catch {}

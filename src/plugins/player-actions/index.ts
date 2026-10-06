@@ -101,7 +101,7 @@ export default createPlugin<
         setConfig: (patch) => {
           const next = { ...this.getCurrent().sectionRepeat, ...patch };
           this.current = { ...this.getCurrent(), sectionRepeat: next };
-          this.ctx?.setConfig({ sectionRepeat: next });
+          return this.ctx?.setConfig({ sectionRepeat: next });
         },
       });
     },

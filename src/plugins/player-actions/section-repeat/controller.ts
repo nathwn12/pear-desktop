@@ -52,7 +52,7 @@ function videoIdFromEvent(event: Event): string | null {
  */
 interface FeatureContext<Slice> {
   getConfig: () => Slice | Promise<Slice>;
-  setConfig: (patch: Partial<Slice>) => void;
+  setConfig: (patch: Partial<Slice>) => void | Promise<void>;
 }
 
 export interface SectionRepeatController {
@@ -78,7 +78,7 @@ export interface SectionRepeatController {
   onPlayerApiReady: (api: MusicPlayer) => void;
   currentVideoId: () => string | null;
   seedCurrentSongIfUnknown: () => void;
-  onSave: () => void;
+  onSave: () => Promise<void>;
   restoreForCurrentSong: () => void;
   armSettleCheck: () => void;
   runSettleCheck: (
@@ -270,26 +270,40 @@ export function createSectionRepeatController(): SectionRepeatController {
       return null;
     },
 
-    onSave() {
+    async onSave() {
+      const ctx = this.ctx;
       const videoId = this.currentVideoId();
-      if (videoId === null) return;
+      if (!ctx || videoId === null) return;
       const entry = {
         videoId,
         startSeconds: this.state.startSeconds,
         endSeconds: this.state.endSeconds,
       };
       const removed = entry.startSeconds === null && entry.endSeconds === null;
-      const existing = lookupSaved(this.saved, videoId);
-      const unchanged = removed
-        ? existing === null
-        : existing !== null &&
-          existing.startSeconds === entry.startSeconds &&
-          existing.endSeconds === entry.endSeconds;
-      if (unchanged) return;
-
-      this.saved = upsertSaved(this.saved, entry);
-      this.ctx?.setConfig({ saved: this.saved });
-      this.section?.notify(removed ? 'removed' : 'saved');
+      try {
+        // The composed config includes earlier queued save intent, so two
+        // consecutive song saves cannot discard each other's entries.
+        const current = await ctx.getConfig();
+        const next = upsertSaved(current.saved, entry);
+        await ctx.setConfig({ saved: next });
+        this.saved = (await ctx.getConfig()).saved;
+        // A song change landing mid-save owns the state now; the notice for the
+        // old song would be stale, so only report when the song and the points
+        // are still the ones this save was composed from. `videoId` may have
+        // come from the API fallback (no event id was latched), so re-resolve
+        // rather than compare the null-able event latch: `latestVideoId`
+        // against the fallback id would suppress the notice for every
+        // legitimate fallback save.
+        if (
+          this.currentVideoId() === videoId &&
+          this.state.startSeconds === entry.startSeconds &&
+          this.state.endSeconds === entry.endSeconds
+        ) {
+          this.section?.notify(removed ? 'removed' : 'saved');
+        }
+      } catch {
+        this.section?.notify('failed');
+      }
     },
 
     restoreForCurrentSong() {

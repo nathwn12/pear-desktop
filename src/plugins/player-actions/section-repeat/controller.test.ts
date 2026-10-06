@@ -390,3 +390,35 @@ test('a payload-less change on a replaced video defers instead of seeking', asyn
   changeSong('song-b');
   expect(replacement.currentTime).toBe(30);
 });
+
+test('a payload-less change still saves and reports when the fallback resolves the id', async () => {
+  const { controller, ctx, setConfigCalls } = await boot({ saved: [] });
+  // The player API is the only id source once the event carries none; the
+  // save must adopt it rather than fall silent.
+  controller.api = {
+    getPlayerResponse: () => ({ videoDetails: { videoId: 'song-x' } }),
+  } as unknown as PlayerApi;
+  await controller.start(ctx);
+
+  // The synthetic payload-less change drops the latched event id...
+  changeSongWithoutId();
+  expect(controller.latestVideoId).toBeNull();
+
+  // ...so the save resolves its song from the API fallback instead.
+  controller.state = { ...controller.state, startSeconds: 10, endSeconds: 20 };
+  const handle = controller.section;
+  if (handle === null) throw new Error('section was not created');
+  const notices: unknown[] = [];
+  const notify = handle.notify;
+  handle.notify = (kind) => {
+    notices.push(kind);
+    notify(kind);
+  };
+
+  await controller.onSave();
+
+  // The entry is persisted AND the success notice fires: comparing the
+  // null-able `latestVideoId` against the fallback id would drop the notice.
+  expect(setConfigCalls).toEqual([{ saved: [savedEntry('song-x', 10, 20)] }]);
+  expect(notices).toContain('saved');
+});

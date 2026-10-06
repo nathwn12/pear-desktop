@@ -30,6 +30,7 @@ let panel: HTMLDivElement | null = null;
 let observer: MutationObserver | null = null;
 /** The live bar being watched out for; the observer itself sits on its parent. */
 let observedBar: Element | null = null;
+let observedParent: Node | null = null;
 let observerRetry: ReturnType<typeof setInterval> | null = null;
 let outsideHandler: ((event: MouseEvent) => void) | null = null;
 let escapeHandler: ((event: KeyboardEvent) => void) | null = null;
@@ -105,13 +106,15 @@ function scheduleObserverRetry(): void {
 }
 
 /**
- * Observes `ytmusic-player-bar`'s parent, never the bar itself and never
- * `document.body`: a MutationObserver does not fire when its observed node is
- * removed (removal is a childList mutation of the parent), so watching the bar
- * left the observer bound to a detached node and the cog gone for the session
- * when the bar was replaced. The parent's childList catches the bar being
- * removed/replaced and being born, stays scoped to the bar with no document-wide
- * subtree, and a missing bar (app open) is still polled.
+ * Observes `ytmusic-player-bar`'s subtree plus its ancestor chain, never
+ * `document.body` as a subtree: a MutationObserver does not fire when its
+ * observed node is removed (removal is a childList mutation of the parent), so
+ * watching only the bar left the observer bound to a detached node and the cog
+ * gone for the session when the bar was replaced. The bar's own subtree catches
+ * controls rendering inside it; each ancestor's direct childList catches the bar
+ * (or a wrapper holding it) being removed/replaced and being born. Both stay
+ * scoped with no document-wide subtree, and a missing bar (app open) is still
+ * polled.
  */
 function ensureObserver(): void {
   if (!observer) {
@@ -126,14 +129,26 @@ function ensureObserver(): void {
     if (observedBar !== null) {
       observer.disconnect();
       observedBar = null;
+      observedParent = null;
     }
     scheduleObserverRetry();
     return;
   }
-  if (observedBar === bar && bar.isConnected) return;
+  if (observedBar === bar && observedParent === parent && bar.isConnected)
+    return;
   observer.disconnect();
-  observer.observe(parent, { childList: true });
+  // Watch the bar's own subtree too: a control rendering inside the bar (the
+  // volume anchor appearing late) changes where the cog belongs, and only a
+  // bar-scoped subtree sees that. The ancestor loop below catches the bar being
+  // removed/replaced, which the bar's own observer cannot (removal is recorded
+  // on the parent). Direct child lists of each replacement ancestor, never a
+  // document-wide subtree: unrelated mutations elsewhere stay unobserved.
+  observer.observe(bar, { childList: true, subtree: true });
+  for (let target: Node | null = parent; target; target = target.parentNode) {
+    observer.observe(target, { childList: true });
+  }
   observedBar = bar;
+  observedParent = parent;
   stopObserverRetry();
 }
 
@@ -184,10 +199,14 @@ function openPanel(): void {
   }
   if (!escapeHandler) {
     escapeHandler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closePanel();
+      if (event.key === 'Escape') {
+        closePanel();
+        cog?.focus();
+      }
     };
     document.addEventListener('keydown', escapeHandler, { capture: true });
   }
+  panel.querySelector<HTMLElement>('input,button,[tabindex]')?.focus();
 }
 
 function closePanel(): void {
@@ -222,6 +241,7 @@ function teardown(): void {
   observer?.disconnect();
   observer = null;
   observedBar = null;
+  observedParent = null;
   stopObserverRetry();
   document.getElementById(STYLE_ID)?.remove();
 }
