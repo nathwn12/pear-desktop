@@ -818,7 +818,7 @@ app.whenReady().then(async () => {
     }, 2000);
     electronUpdater.autoUpdater.on('update-available', () => {
       const downloadLink =
-        'https://github.com/pear-devs/pear-desktop/releases/latest';
+        'https://github.com/nathwn12/pear-desktop/releases/latest';
       const dialogOptions: Electron.MessageBoxOptions = {
         type: 'info',
         buttons: [

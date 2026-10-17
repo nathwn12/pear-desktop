@@ -38,6 +38,10 @@ win:
   compression: maximum
 nsisWeb:
   runAfterFinish: false
+publish:
+  provider: github
+  owner: nathwn12
+  repo: pear-desktop
 linux:
   icon: assets/generated/icons/png
   category: AudioVideo
