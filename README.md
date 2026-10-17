@@ -1,3 +1,7 @@
+> **Fork of [pear-devs/pear-desktop](https://github.com/pear-devs/pear-desktop).** This fork repoints the updater, installer, and Discord presence at itself and carries player plugins (Slowed Reverb, Section Repeat) ahead of upstream.
+>
+> Upstream's README follows unchanged.
+
 <div align="center" markdown="1">
    <sup>Special thanks to:</sup>
    <br>
