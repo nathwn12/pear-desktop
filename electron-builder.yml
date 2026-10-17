@@ -36,6 +36,7 @@ win:
         - ia32
         - arm64
   compression: maximum
+  artifactName: "YouTube-Music-Setup-${version}.${ext}"
 nsisWeb:
   runAfterFinish: false
 publish:
