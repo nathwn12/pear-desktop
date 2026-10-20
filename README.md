@@ -1,3 +1,11 @@
+> **Fork of [pear-devs/pear-desktop](https://github.com/pear-devs/pear-desktop).**
+>
+> Why this copy exists: a nathwn12-maintained build with its own update channel and installer identity.
+>
+> What it changes: updater/installer/Discord links repointed at `nathwn12/pear-desktop`; carries player plugins (Slowed Reverb, Section Repeat) ahead of upstream.
+>
+> Upstream's README below is unchanged; all upstream credit remains with `pear-devs`.
+
 <div align="center" markdown="1">
    <sup>Special thanks to:</sup>
    <br>
