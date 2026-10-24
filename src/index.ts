@@ -111,34 +111,9 @@ app.commandLine.appendSwitch(
 
 // Disable Fluent Scrollbar (for OverlayScrollbar)
 const disabledFeatures = ['FluentScrollbar'];
-let disableHardwareAcceleration = config.get(
+const disableHardwareAcceleration = config.get(
   'options.disableHardwareAcceleration',
 );
-
-// Linux specific fixes
-if (is.linux()) {
-  // Stops chromium from launching its own MPRIS service
-  if (await config.plugins.isEnabled('shortcuts')) {
-    disabledFeatures.push('MediaSessionService');
-  }
-
-  // https://github.com/electron/electron/issues/15947
-  if (await config.plugins.isEnabled('transparent-player')) {
-    disableHardwareAcceleration = true;
-    app.commandLine.appendSwitch('enable-transparent-visuals');
-    app.commandLine.appendSwitch('enable-unsafe-swiftshader');
-  }
-
-  // Overrides WM_CLASS for X11 to correspond to icon filename
-  app.setName(
-    'com.github.th-ch.\u0079\u006f\u0075\u0074\u0075\u0062\u0065\u002d\u006d\u0075\u0073\u0069\u0063',
-  );
-  // for wayland
-  app.commandLine.appendSwitch(
-    'class',
-    'com.github.th-ch.\u0079\u006f\u0075\u0074\u0075\u0062\u0065\u002d\u006d\u0075\u0073\u0069\u0063',
-  );
-}
 
 if (disableHardwareAcceleration) {
   if (is.dev()) console.log('Disabling hardware acceleration');
@@ -174,12 +149,7 @@ electronDebug({
   showDevTools: false, // Disable automatic devTools on new window
 });
 
-let icon = 'assets/icon.png';
-if (process.platform === 'win32') {
-  icon = 'assets/generated/icons/win/icon.ico';
-} else if (process.platform === 'darwin') {
-  icon = 'assets/generated/icons/mac/icon.icns';
-}
+const icon = 'assets/generated/icons/win/icon.ico';
 
 function onClosed() {
   // Dereference the window
@@ -342,21 +312,11 @@ async function createMainWindow() {
   };
 
   const decorations: Partial<BrowserWindowConstructorOptions> = {
-    frame: !is.macOS() && !useInlineMenu,
+    frame: !useInlineMenu,
     titleBarOverlay: defaultTitleBarOverlayOptions,
-    titleBarStyle: useInlineMenu
-      ? 'hidden'
-      : is.macOS()
-        ? 'hiddenInset'
-        : 'default',
+    titleBarStyle: useInlineMenu ? 'hidden' : 'default',
     autoHideMenuBar: config.get('options.hideMenu'),
   };
-
-  // Note: on linux, for some weird reason, having these extra properties with 'frame: false' does not work
-  if (is.linux() && useInlineMenu) {
-    delete decorations.titleBarOverlay;
-    delete decorations.titleBarStyle;
-  }
 
   const electronWindowSettings: Electron.BrowserWindowConstructorOptions = {
     icon,
@@ -393,9 +353,7 @@ async function createMainWindow() {
     const display = screen.getDisplayNearestPoint(windowPosition);
     const primaryDisplay = screen.getPrimaryDisplay();
 
-    const scaleFactor = is.windows()
-      ? primaryDisplay.scaleFactor / display.scaleFactor
-      : 1;
+    const scaleFactor = primaryDisplay.scaleFactor / display.scaleFactor;
     const scaledWidth = Math.floor(windowSize.width * scaleFactor);
     const scaledHeight = Math.floor(windowSize.height * scaleFactor);
 
@@ -534,19 +492,8 @@ app.once('browser-window-created', (_event, win) => {
   if (config.get('options.overrideUserAgent')) {
     // User agents are from https://developers.whatismybrowser.com/useragents/explore/
     const originalUserAgent = win.webContents.userAgent;
-    const userAgents = {
-      mac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.152 Safari/537.36',
-      windows:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.152 Safari/537.36',
-      linux:
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.152 Safari/537.36',
-    };
-
-    const updatedUserAgent = is.macOS()
-      ? userAgents.mac
-      : is.windows()
-        ? userAgents.windows
-        : userAgents.linux;
+    const updatedUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.152 Safari/537.36';
 
     win.webContents.userAgent = updatedUserAgent;
     app.userAgentFallback = updatedUserAgent;
@@ -622,9 +569,7 @@ app.once('browser-window-created', (_event, win) => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  app.quit();
 
   // Unregister all shortcuts.
   globalShortcut.unregisterAll();
@@ -871,17 +816,12 @@ app.whenReady().then(async () => {
     config.set('options.hideMenuWarned', true);
   }
 
-  // Optimized for Mac OS X
-  if (is.macOS() && !config.get('options.appVisible')) {
-    app.dock?.hide();
-  }
-
   let forceQuit = false;
   app.on('before-quit', () => {
     forceQuit = true;
   });
 
-  if (is.macOS() || config.get('options.tray')) {
+  if (config.get('options.tray')) {
     mainWindow.on('close', (event) => {
       // Hide the window instead of quitting (quit is available in tray options)
       if (!forceQuit) {

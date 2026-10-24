@@ -1,9 +1,6 @@
-import PausedTrayIconWhite from '@assets/tray-paused-white.png?asset&asarUnpack';
 import PausedTrayIcon from '@assets/tray-paused.png?asset&asarUnpack';
-import TrayIconWhite from '@assets/tray-white.png?asset&asarUnpack';
 import TrayIcon from '@assets/tray.png?asset&asarUnpack';
 import { Menu, nativeImage, screen, Tray } from 'electron';
-import is from 'electron-is';
 
 import { APPLICATION_NAME, t } from '@/i18n';
 
@@ -49,22 +46,16 @@ export const setUpTray = (app: Electron.App, win: Electron.BrowserWindow) => {
 
   const { playPause, next, previous } = getSongControls(win);
 
-  const pixelRatio = is.windows()
-    ? screen.getPrimaryDisplay().scaleFactor || 1
-    : 1;
+  const pixelRatio = screen.getPrimaryDisplay().scaleFactor || 1;
 
-  const defaultTrayIcon = nativeImage
-    .createFromPath(is.macOS() ? TrayIconWhite : TrayIcon)
-    .resize({
-      width: 16 * pixelRatio,
-      height: 16 * pixelRatio,
-    });
-  const pausedTrayIcon = nativeImage
-    .createFromPath(is.macOS() ? PausedTrayIconWhite : PausedTrayIcon)
-    .resize({
-      width: 16 * pixelRatio,
-      height: 16 * pixelRatio,
-    });
+  const defaultTrayIcon = nativeImage.createFromPath(TrayIcon).resize({
+    width: 16 * pixelRatio,
+    height: 16 * pixelRatio,
+  });
+  const pausedTrayIcon = nativeImage.createFromPath(PausedTrayIcon).resize({
+    width: 16 * pixelRatio,
+    height: 16 * pixelRatio,
+  });
 
   tray = new Tray(defaultTrayIcon);
 

@@ -8,7 +8,6 @@ import {
   type MenuItem,
   shell,
 } from 'electron';
-import is from 'electron-is';
 import { satisfies } from 'semver';
 import { languageResources } from 'virtual:i18n';
 import { allPlugins } from 'virtual:plugins';
@@ -388,43 +387,31 @@ export const mainMenuTemplate = async (
             win.setAlwaysOnTop(item.checked);
           },
         },
-        ...((is.windows() || is.linux()
-          ? [
-              {
-                label: t('main.menu.options.submenu.hide-menu.label'),
-                type: 'checkbox',
-                checked: config.get('options.hideMenu'),
-                click(item) {
-                  config.setMenuOption('options.hideMenu', item.checked);
-                  if (item.checked && !config.get('options.hideMenuWarned')) {
-                    dialog.showMessageBox(win, {
-                      type: 'info',
-                      title: t(
-                        'main.menu.options.submenu.hide-menu.dialog.title',
-                      ),
-                      message: t(
-                        'main.menu.options.submenu.hide-menu.dialog.message',
-                      ),
-                    });
-                  }
-                },
-              },
-            ]
-          : []) satisfies Electron.MenuItemConstructorOptions[]),
-        ...((is.windows() || is.macOS()
-          ? // Only works on Win/Mac
-            // https://www.electronjs.org/docs/api/app#appsetloginitemsettingssettings-macos-windows
-            [
-              {
-                label: t('main.menu.options.submenu.start-at-login'),
-                type: 'checkbox',
-                checked: config.get('options.startAtLogin'),
-                click(item) {
-                  config.setMenuOption('options.startAtLogin', item.checked);
-                },
-              },
-            ]
-          : []) satisfies Electron.MenuItemConstructorOptions[]),
+        {
+          label: t('main.menu.options.submenu.hide-menu.label'),
+          type: 'checkbox',
+          checked: config.get('options.hideMenu'),
+          click(item) {
+            config.setMenuOption('options.hideMenu', item.checked);
+            if (item.checked && !config.get('options.hideMenuWarned')) {
+              dialog.showMessageBox(win, {
+                type: 'info',
+                title: t('main.menu.options.submenu.hide-menu.dialog.title'),
+                message: t(
+                  'main.menu.options.submenu.hide-menu.dialog.message',
+                ),
+              });
+            }
+          },
+        },
+        {
+          label: t('main.menu.options.submenu.start-at-login'),
+          type: 'checkbox',
+          checked: config.get('options.startAtLogin'),
+          click(item) {
+            config.setMenuOption('options.startAtLogin', item.checked);
+          },
+        },
         {
           label: t('main.menu.options.submenu.tray.label'),
           submenu: [
@@ -575,27 +562,12 @@ export const mainMenuTemplate = async (
               },
             },
             { type: 'separator' },
-            is.macOS()
-              ? {
-                  label: t(
-                    'main.menu.options.submenu.advanced-options.submenu.toggle-dev-tools',
-                  ),
-                  // Cannot use "toggleDevTools" role in macOS
-                  click() {
-                    const { webContents } = win;
-                    if (webContents.isDevToolsOpened()) {
-                      webContents.closeDevTools();
-                    } else {
-                      webContents.openDevTools();
-                    }
-                  },
-                }
-              : {
-                  label: t(
-                    'main.menu.options.submenu.advanced-options.submenu.toggle-dev-tools',
-                  ),
-                  role: 'toggleDevTools',
-                },
+            {
+              label: t(
+                'main.menu.options.submenu.advanced-options.submenu.toggle-dev-tools',
+              ),
+              role: 'toggleDevTools',
+            },
             {
               label: t(
                 'main.menu.options.submenu.advanced-options.submenu.edit-config-json',
@@ -696,31 +668,7 @@ export const mainMenuTemplate = async (
   ];
 };
 export const setApplicationMenu = async (win: Electron.BrowserWindow) => {
-  const menuTemplate: MenuTemplate = [...(await mainMenuTemplate(win))];
-  if (process.platform === 'darwin') {
-    const { name } = app;
-    menuTemplate.unshift({
-      label: name,
-      submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
-        { role: 'selectAll' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { type: 'separator' },
-        { role: 'minimize' },
-        { role: 'close' },
-        { role: 'quit' },
-      ],
-    });
-  }
-
-  const menu = Menu.buildFromTemplate(menuTemplate);
+  const menu = Menu.buildFromTemplate(await mainMenuTemplate(win));
   Menu.setApplicationMenu(menu);
 };
 
