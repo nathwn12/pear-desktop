@@ -41,10 +41,9 @@ export const LRC = {
       while ((match = line.match(timestampRegex)?.groups)) {
         const { minutes, seconds, centiseconds } = match;
         const milliseconds = match.centiseconds.padEnd(3, '0');
-        const timeInMs =
-          ((parseInt(minutes) * 60) * 1000) +
-          (parseInt(seconds) * 1000) +
-          parseInt(milliseconds);
+        const minutesMs = parseInt(minutes) * 60 * 1000;
+        const secondsMs = parseInt(seconds) * 1000;
+        const timeInMs = minutesMs + secondsMs + parseInt(milliseconds);
 
         timestamps.push({
           time: `${minutes}:${seconds}:${centiseconds}`,
@@ -74,10 +73,9 @@ export const LRC = {
       const words = Array.from(text.matchAll(wordRegex), ({ groups }) => {
         const { minutes, seconds, centiseconds, word } = groups!;
         const milliseconds = centiseconds.padEnd(3, '0');
-        const timeInMs =
-          ((parseInt(minutes) * 60) * 1000) +
-          (parseInt(seconds) * 1000) +
-          parseInt(milliseconds);
+        const minutesMs = parseInt(minutes) * 60 * 1000;
+        const secondsMs = parseInt(seconds) * 1000;
+        const timeInMs = minutesMs + secondsMs + parseInt(milliseconds);
 
         return { timeInMs, word };
       });

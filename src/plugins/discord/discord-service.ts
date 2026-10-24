@@ -136,10 +136,12 @@ export class DiscordService {
       songInfo.songDuration > 0 &&
       typeof songInfo.elapsedSeconds === 'number'
     ) {
-      const songStartTime = Date.now() - (songInfo.elapsedSeconds * 1000);
+      const elapsedMs = songInfo.elapsedSeconds * 1000;
+      const songStartTime = Date.now() - elapsedMs;
       activityInfo.startTimestamp = Math.floor(songStartTime / 1000);
+      const durationMs = songInfo.songDuration * 1000;
       activityInfo.endTimestamp = Math.floor(
-        (songStartTime + (songInfo.songDuration * 1000)) / 1000,
+        (songStartTime + durationMs) / 1000,
       );
     }
 

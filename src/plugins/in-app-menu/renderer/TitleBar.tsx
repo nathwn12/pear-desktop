@@ -381,10 +381,12 @@ export const TitleBar = (props: TitleBarProps) => {
           if (ignoreTransition()) return;
           const index = Number(element.getAttribute('data-index') ?? 0);
           const length = Number(element.getAttribute('data-length') ?? 1);
+          const baseDelay = length * 0.025;
+          const offset = index * 0.025;
 
           (element as HTMLElement).style.setProperty(
             'transition-delay',
-            `${(length * 0.025) - (index * 0.025)}s`,
+            `${baseDelay - offset}s`,
           );
         }}
       >

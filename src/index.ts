@@ -359,12 +359,16 @@ async function createMainWindow() {
 
     const scaledX = windowX;
     const scaledY = windowY;
+    const halfWidth = scaledWidth / 2;
+    const halfHeight = scaledHeight / 2;
+    const scaledCenterX = scaledX + halfWidth;
+    const scaledCenterY = scaledY + halfHeight;
 
     if (
-      scaledX + (scaledWidth / 2) < display.bounds.x - 8 || // Left
-      scaledX + (scaledWidth / 2) > display.bounds.x + display.bounds.width || // Right
+      scaledCenterX < display.bounds.x - 8 || // Left
+      scaledCenterX > display.bounds.x + display.bounds.width || // Right
       scaledY < display.bounds.y - 8 || // Top
-      scaledY + (scaledHeight / 2) > display.bounds.y + display.bounds.height // Bottom
+      scaledCenterY > display.bounds.y + display.bounds.height // Bottom
     ) {
       // Window is offscreen
       if (is.dev()) {
