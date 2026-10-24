@@ -1,10 +1,10 @@
 > **Fork of [pear-devs/pear-desktop](https://github.com/pear-devs/pear-desktop).**
 >
-> Why this copy exists: a nathwn12-maintained build with its own update channel and installer identity.
+> Why this copy exists: a nathwn12-maintained Windows build with its own update channel and installer identity.
 >
-> What it changes: updater/installer/Discord links repointed at `nathwn12/pear-desktop`; carries player plugins (Slowed Reverb, Section Repeat) ahead of upstream.
+> What it changes: Windows-only support — this fork ships and builds for Windows only; updater/installer/Discord links repointed at `nathwn12/pear-desktop`; carries player plugins (Slowed Reverb, Section Repeat) ahead of upstream.
 >
-> Upstream's README below is unchanged; all upstream credit remains with `pear-devs`.
+> Upstream's README below is adapted where platform support differs; all upstream credit remains with `pear-devs`.
 
 <div align="center" markdown="1">
    <sup>Special thanks to:</sup>
@@ -29,7 +29,6 @@
 [![eslint code style](https://img.shields.io/badge/code_style-eslint-5ed9c7.svg?style=for-the-badge)](https://github.com/pear-devs/pear-desktop/blob/master/eslint.config.mjs)
 [![Build status](https://img.shields.io/github/actions/workflow/status/pear-devs/pear-desktop/build.yml?branch=master&style=for-the-badge)](https://GitHub.com/pear-devs/pear-desktop/releases/)
 [![GitHub All Releases](https://img.shields.io/github/downloads/pear-devs/pear-desktop/total?style=for-the-badge)](https://GitHub.com/pear-devs/pear-desktop/releases/)
-<!--[![AUR](https://img.shields.io/aur/version/pear-desktop-bin?color=blueviolet&style=for-the-badge)](https://aur.archlinux.org/packages/pear-desktop-bin)-->
 [![Known Vulnerabilities](https://snyk.io/test/github/pear-devs/pear-desktop/badge.svg)](https://snyk.io/test/github/pear-devs/pear-desktop)
 
 </div>
@@ -58,9 +57,6 @@
 - [Features](#features)
 - [Translation](#translation)
 - [Download](#download)
-  - [Arch Linux](#arch-linux)
-  - [Solus](#solus)
-  - [MacOS](#macos)
   - [Windows](#windows)
     - [How to install without a network connection? (in Windows)](#how-to-install-without-a-network-connection-in-windows)
 - [Themes](#themes)
@@ -85,33 +81,9 @@ You can help with translation on [Hosted Weblate](https://bit.ly/48n5YF7).
 
 ## Download
 
-You can check out the [latest release](https://github.com/pear-devs/pear-desktop/releases/latest) to quickly find the
-latest version.
+This fork supports Windows only. macOS and Linux are not supported: no fork builds, packages, or casks exist for them.
 
-### Arch Linux
-
-Install the [`pear-desktop`](https://aur.archlinux.org/packages/pear-desktop) package from the AUR. For AUR installation instructions, take a look at
-this [wiki page](https://wiki.archlinux.org/index.php/Arch_User_Repository#Installing_packages).
-
-### [Solus](https://getsol.us/)
-
-```bash
-sudo eopkg install pear-desktop
-```
-
-### macOS
-
-You can install the app using Homebrew (see the [cask definition](https://github.com/pear-devs/homebrew-pear)):
-
-```bash
-brew install pear-devs/pear/pear-desktop
-```
-
-If you install the app manually and get an error "is damaged and can’t be opened." when launching the app, run the following in the Terminal:
-
-```bash
-/usr/bin/xattr -cr /Applications/Pear\ Desktop.app
-```
+Windows builds ship from the [latest release](https://github.com/nathwn12/pear-desktop/releases/latest).
 
 ### Windows
 
@@ -136,7 +108,7 @@ winget install pear-devs.pear-desktop
 
 #### How to install without a network connection? (in Windows)
 
-- Download the `*.nsis.7z` file for _your device architecture_ in [release page](https://github.com/pear-devs/pear-desktop/releases/latest).
+- Download the `*.nsis.7z` file for _your device architecture_ in [release page](https://github.com/nathwn12/pear-desktop/releases/latest).
   - `x64` for 64-bit Windows
   - `ia32` for 32-bit Windows
   - `arm64` for ARM64 Windows
@@ -161,7 +133,7 @@ pnpm dev
 
 Instead of installing pnpm on your system, you can also use [devcontainers](https://containers.dev/). You can use devcontainers either as a development environment in VS Code, or as a way to easily build the project without installing dependencies on your host system.
 
-Note that this has it's own limitations (for example, GUI doesn't work on, at least some, Linux hosts).
+Note that this has its own limitations; remember that this fork builds for Windows only.
 
 ## Build your own plugins
 
@@ -283,19 +255,17 @@ export default createPlugin({
 
 ## Build
 
+Windows is the only supported build target in this fork.
+
 1. Clone the repo
 2. Follow [this guide](https://pnpm.io/installation) to install `pnpm`
 3. Run `pnpm install --frozen-lockfile` to install dependencies
-4. Run `pnpm build:OS`
+4. Run `pnpm dist:win` to build the Windows installer
 
-- `pnpm dist:win` - Windows
-- `pnpm dist:linux` - Linux (amd64)
-- `pnpm dist:linux:deb-arm64` - Linux (arm64 for Debian)
-- `pnpm dist:linux:rpm-arm64` - Linux (arm64 for Fedora)
-- `pnpm dist:mac` - macOS (amd64)
-- `pnpm dist:mac:arm64` - macOS (arm64)
+`pnpm dist:win` produces the Windows installer; `pnpm dist` is an alias for the same Windows build. Signing and
+publication use `pnpm release:win`.
 
-Builds the app for macOS, Linux, and Windows,
+Builds the app for Windows,
 using [electron-builder](https://github.com/electron-userland/electron-builder).
 
 ### Building in devcontainer
@@ -303,8 +273,8 @@ using [electron-builder](https://github.com/electron-userland/electron-builder).
 1. Clone the repo;
 2. Open the folder in VS Code;
 3. Reopen in container when prompted;
-4. Run `pnpm build` as above (choosing the desired target);
-5. Collect the built files from the `dist` folder.
+4. Run `pnpm dist:win` to build the Windows installer;
+5. Collect the built files from the `pack` folder.
 
 Since devcontainer uses a mount for the workspace, the built files will be available on the host system as well.
 
