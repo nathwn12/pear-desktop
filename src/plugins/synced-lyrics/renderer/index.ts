@@ -17,15 +17,28 @@ export let netFetch: (
   init?: RequestInit,
 ) => Promise<[number, string, Record<string, string>]>;
 
+/**
+ * The player API and the exact listener handed to `addEventListener`, kept in
+ * module scope: `startPlugin` rebinds every function-valued property on the
+ * plugin object, so a property here would not be the identity that was
+ * registered and `stop` could never unregister it.
+ */
+let videoDataChangeApi: MusicPlayer | undefined;
+let videoDataChangeListener: (() => Promise<void>) | undefined;
+
 export const renderer = createRenderer<
   {
     observerCallback: MutationCallback;
     observer?: MutationObserver;
     videoDataChange: () => Promise<void>;
     updateTimestampInterval?: NodeJS.Timeout | string | number;
+    /** Set by `stop`, cleared by `start`/`onPlayerApiReady`: a stopped plugin never polls. */
+    stopped: boolean;
   },
   SyncedLyricsPluginConfig
 >({
+  stopped: false,
+
   onConfigChange(newConfig) {
     setConfig(newConfig);
   },
@@ -47,12 +60,27 @@ export const renderer = createRenderer<
 
   async onPlayerApiReady(api: MusicPlayer) {
     _ytAPI = api;
+    this.stopped = false;
 
-    api.addEventListener('videodatachange', this.videoDataChange);
+    // Re-enable and re-initialisation must own exactly one registration.
+    if (videoDataChangeApi && videoDataChangeListener) {
+      videoDataChangeApi.removeEventListener(
+        'videodatachange',
+        videoDataChangeListener,
+      );
+    }
+
+    videoDataChangeApi = api;
+    videoDataChangeListener = this.videoDataChange.bind(this);
+    api.addEventListener('videodatachange', videoDataChangeListener);
 
     await this.videoDataChange();
   },
   async videoDataChange() {
+    // The plugin object outlives `stop` (module singleton), so a late or
+    // still-registered callback must not revive the polling interval.
+    if (this.stopped) return;
+
     if (!this.updateTimestampInterval) {
       this.updateTimestampInterval = setInterval(
         () => setCurrentTime((_ytAPI?.getCurrentTime() ?? 0) * 1000),
@@ -76,6 +104,7 @@ export const renderer = createRenderer<
   },
 
   async start(ctx: RendererContext<SyncedLyricsPluginConfig>) {
+    this.stopped = false;
     netFetch = ctx.ipc.invoke.bind(ctx.ipc, 'synced-lyrics:fetch');
 
     setConfig(await ctx.getConfig());
@@ -86,6 +115,23 @@ export const renderer = createRenderer<
   },
 
   stop() {
+    this.stopped = true;
+
+    if (videoDataChangeApi && videoDataChangeListener) {
+      videoDataChangeApi.removeEventListener(
+        'videodatachange',
+        videoDataChangeListener,
+      );
+    }
+
+    videoDataChangeApi = undefined;
+    videoDataChangeListener = undefined;
+
+    if (this.updateTimestampInterval) {
+      clearInterval(this.updateTimestampInterval);
+      this.updateTimestampInterval = undefined;
+    }
+
     disposeReactiveRoot();
   },
 });
