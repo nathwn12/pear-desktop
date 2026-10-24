@@ -24,11 +24,60 @@ export const moveVolumeHud = debounce((showVideo: boolean) => {
 
 let options: PreciseVolumePluginConfig;
 
+/**
+ * Everything the current activation registered. `onPlayerApiReady` empties it
+ * before registering, and `onUnload` empties it when the plugin is disabled:
+ * a stopped plugin owns no listener, observer or injected node, and a re-enable
+ * owns exactly one set.
+ */
+let disposers: (() => void)[] = [];
+
+/**
+ * Bumped by every activation and every stop. Initialisation awaits (config,
+ * the video-toggle probe) can resolve after the plugin was stopped or
+ * re-enabled, so each continuation checks it is still the live activation
+ * before registering anything.
+ */
+let generation = 0;
+
+const listen = <E extends Event>(
+  target: EventTarget,
+  type: string,
+  listener: (event: E) => void,
+) => {
+  target.addEventListener(type, listener as EventListener);
+  disposers.push(() =>
+    target.removeEventListener(type, listener as EventListener),
+  );
+};
+
+/** Tear down the current activation; safe to call when nothing is registered. */
+export const onUnload = () => {
+  generation += 1;
+
+  const pending = disposers;
+  disposers = [];
+
+  for (const dispose of pending) {
+    dispose();
+  }
+};
+
 export const onPlayerApiReady = async (
   playerApi: MusicPlayer,
   context: RendererContext<PreciseVolumePluginConfig>,
 ) => {
-  options = await context.getConfig();
+  // Re-init owns exactly one set of registrations, not one more than before.
+  onUnload();
+  const activation = generation;
+
+  const config = await context.getConfig();
+  // A stop during getConfig abandons this attempt: no config, no api, no
+  // registration, so the plugin stays fully unloaded.
+  if (activation !== generation) {
+    return;
+  }
+  options = config;
   api = playerApi;
 
   // Without this function it would rewrite config 20 time when volume change by 20
@@ -64,16 +113,26 @@ export const onPlayerApiReady = async (
       ($('#main-panel')?.computedStyleMap().get('display') as CSSKeywordValue)
         ?.value === 'none';
     injectVolumeHud(noVid);
+    disposers.push(() => {
+      $('#volumeHud')?.remove();
+    });
     if (!noVid) {
       setupVideoPlayerOnwheel();
-      if (!(await window.mainConfig.plugins.isEnabled('video-toggle'))) {
+      const videoToggleEnabled =
+        await window.mainConfig.plugins.isEnabled('video-toggle');
+      // A stop during the probe abandons the rest of this activation.
+      if (activation !== generation) {
+        return;
+      }
+      if (!videoToggleEnabled) {
         // Video-toggle handles hud positioning on its own
         const videoMode = () =>
           api.getPlayerResponse().videoDetails?.musicVideoType !==
           'MUSIC_VIDEO_TYPE_ATV';
-        $('video')?.addEventListener('peard:src-changed', () =>
-          moveVolumeHud(videoMode()),
-        );
+        const video = $('video');
+        if (video) {
+          listen(video, 'peard:src-changed', () => moveVolumeHud(videoMode()));
+        }
       }
     }
   }
@@ -116,7 +175,7 @@ export const onPlayerApiReady = async (
     const panel = $<HTMLElement>('#main-panel');
     if (!panel) return;
 
-    panel.addEventListener('wheel', (event) => {
+    listen<WheelEvent>(panel, 'wheel', (event) => {
       event.preventDefault();
       // Event.deltaY < 0 means wheel-up
       changeVolume(event.deltaY < 0);
@@ -133,18 +192,18 @@ export const onPlayerApiReady = async (
     const playerbar = $<HTMLElement>('ytmusic-player-bar');
     if (!playerbar) return;
 
-    playerbar.addEventListener('wheel', (event) => {
+    listen<WheelEvent>(playerbar, 'wheel', (event) => {
       event.preventDefault();
       // Event.deltaY < 0 means wheel-up
       changeVolume(event.deltaY < 0);
     });
 
     // Keep track of mouse position for showVolumeSlider()
-    playerbar.addEventListener('mouseenter', () => {
+    listen(playerbar, 'mouseenter', () => {
       playerbar.classList.add('on-hover');
     });
 
-    playerbar.addEventListener('mouseleave', () => {
+    listen(playerbar, 'mouseleave', () => {
       playerbar.classList.remove('on-hover');
     });
 
@@ -180,6 +239,7 @@ export const onPlayerApiReady = async (
       attributeFilter: ['value'],
       attributeOldValue: true,
     });
+    disposers.push(() => sliderObserver.disconnect());
   }
 
   function setVolume(value: number) {
@@ -251,7 +311,7 @@ export const onPlayerApiReady = async (
 
   function setupLocalArrowShortcuts() {
     if (options.arrowsShortcut) {
-      window.addEventListener('keydown', (event) => {
+      listen<KeyboardEvent>(window, 'keydown', (event) => {
         if (
           $<HTMLElement & { opened: boolean }>('ytmusic-search-box')?.opened
         ) {
@@ -279,6 +339,10 @@ export const onPlayerApiReady = async (
     changeVolume(toIncrease),
   );
   context.ipc.on('setVolume', (value: number) => setVolume(value));
+  disposers.push(() => {
+    context.ipc.removeAllListeners('changeVolume');
+    context.ipc.removeAllListeners('setVolume');
+  });
 
   await firstRun();
 };

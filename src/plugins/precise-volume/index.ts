@@ -6,7 +6,7 @@ import promptOptions from '@/providers/prompt-options';
 import { createPlugin } from '@/utils';
 
 import { overrideListener } from './override';
-import { onConfigChange, onPlayerApiReady } from './renderer';
+import { onConfigChange, onPlayerApiReady, onUnload } from './renderer';
 import hudStyle from './volume-hud.css?inline';
 
 export type PreciseVolumePluginConfig = {
@@ -188,6 +188,7 @@ export default createPlugin({
     start() {
       overrideListener();
     },
+    stop: onUnload,
     onPlayerApiReady,
     onConfigChange,
   },
