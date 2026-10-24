@@ -48,17 +48,9 @@ async function listenForApiLoad() {
 }
 
 async function onApiLoaded() {
-  // Workaround for macOS traffic lights
-  {
-    let osType = 'Unknown';
-    if (window.electronIs.osx()) {
-      osType = 'Macintosh';
-    } else if (window.electronIs.windows()) {
-      osType = 'Windows';
-    } else if (window.electronIs.linux()) {
-      osType = 'Linux';
-    }
-    document.documentElement.setAttribute('data-os', osType);
+  // Tag the root document with the OS for Windows-specific styling
+  if (window.electronIs.windows()) {
+    document.documentElement.setAttribute('data-os', 'Windows');
   }
 
   // Workaround for #2459
