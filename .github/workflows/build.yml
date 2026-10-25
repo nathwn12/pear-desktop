@@ -3,6 +3,18 @@ name: Build Pear Desktop
 on:
   push:
     branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Rehearsal only: must stay true. This path never publishes."
+        required: true
+        type: boolean
+        default: true
+      expected_version:
+        description: "Version the rehearsal must build and verify."
+        required: true
+        type: string
+        default: "3.12.4"
 
 permissions: {}
 
@@ -13,7 +25,7 @@ jobs:
   build:
     permissions:
       contents: write
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'workflow_dispatch' && github.event.pull_request.draft == false
     name: Build Pear Desktop
     runs-on: ${{ matrix.os }}
     strategy:
@@ -45,9 +57,9 @@ jobs:
         run: |
           pnpm build
 
-      # Build and release if it's the main repository and is not pull-request
+      # Build and release only on an upstream push; workflow_dispatch must never publish.
       - name: Build and release on Windows
-        if: startsWith(matrix.os, 'windows') && (github.repository == 'pear-devs/pear-desktop' && github.event_name != 'pull_request')
+        if: startsWith(matrix.os, 'windows') && (github.repository == 'pear-devs/pear-desktop' && github.event_name == 'push')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,7 +78,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     name: Release Pear Desktop
-    if: github.repository == 'pear-devs/pear-desktop' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.repository == 'pear-devs/pear-desktop' && github.ref == 'refs/heads/master'
     needs: build
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -139,3 +151,327 @@ jobs:
           file_pattern: "changelog.md"
           commit_user_name: CI
           commit_user_email: th-ch@users.noreply.github.com
+
+  # Manual, non-publishing rehearsal for the fork. This is the only job
+  # reachable from workflow_dispatch: the build and release jobs above are
+  # gated to `push`. It runs the same producer as the PR artifact workflow
+  # (`pnpm dist:win` -> electron-builder -p never), runs the release gates,
+  # proves the produced files, and uploads a temporary Actions artifact only.
+  # It never creates a tag or release and never uploads a release asset.
+  rehearsal:
+    name: Rehearsal (dry run, no publish)
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'nathwn12/pear-desktop' &&
+      github.ref_type == 'branch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Assert dry-run-only nonpublishing route
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+            throw "Refusing to run: event is '$env:GITHUB_EVENT_NAME', not workflow_dispatch."
+          }
+          if ($env:GITHUB_REF_TYPE -ne 'branch') {
+            throw "Refusing to run: ref type is '$env:GITHUB_REF_TYPE', not branch."
+          }
+          if ($env:GITHUB_REPOSITORY -ne 'nathwn12/pear-desktop') {
+            throw "Refusing to run on repository '$env:GITHUB_REPOSITORY'."
+          }
+          if ($env:DRY_RUN -ne 'true') {
+            throw "Refusing to run: dry_run is '$env:DRY_RUN', not true."
+          }
+          if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) {
+            throw 'Refusing to run with a GitHub token in the environment.'
+          }
+
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$pkg.version
+          $distScript = [string]$pkg.scripts.'dist:win'
+          $releaseScript = [string]$pkg.scripts.'release:win'
+
+          if ($version -ne $env:EXPECTED_VERSION) {
+            throw "package.json version '$version' does not match expected '$env:EXPECTED_VERSION'."
+          }
+          if ($distScript -notmatch 'electron-builder') {
+            throw "dist:win is not an electron-builder producer: $distScript"
+          }
+          if ($distScript -notmatch '(^|\s)(-p|--publish)\s+never(\s|$)') {
+            throw "dist:win is not pinned to never publish: $distScript"
+          }
+          if ($distScript -match '(^|\s)(-p|--publish)\s+(always|onTag|onTagOrDraft)(\s|$)') {
+            throw "dist:win contains a publishing mode: $distScript"
+          }
+          if ($releaseScript -notmatch 'electron-builder') {
+            throw "release:win is not an electron-builder producer: $releaseScript"
+          }
+
+          Write-Host "Rehearsal guard: repository=$env:GITHUB_REPOSITORY ref=$env:GITHUB_REF event=$env:GITHUB_EVENT_NAME dry_run=$env:DRY_RUN"
+          Write-Host "Version: $version (expected $env:EXPECTED_VERSION)"
+          Write-Host "Producer: $distScript"
+          Write-Host 'Publishing: disabled (-p never); no GitHub token is present in this job.'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 11
+          run_install: false
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run source gates
+        run: pnpm check
+
+      - name: Build and package on Windows (nonpublishing)
+        run: pnpm dist:win
+
+      - name: Test
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: pnpm test:debug
+
+      - name: Verify artifact metadata, hashes, and manifest
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-Sha512Base64 {
+            param([Parameter(Mandatory)][string]$Path)
+            $sha = [System.Security.Cryptography.SHA512]::Create()
+            try {
+              $stream = [System.IO.File]::OpenRead($Path)
+              try {
+                return [Convert]::ToBase64String($sha.ComputeHash($stream))
+              }
+              finally {
+                $stream.Dispose()
+              }
+            }
+            finally {
+              $sha.Dispose()
+            }
+          }
+
+          $pack = Join-Path (Get-Location) 'pack'
+          if (-not (Test-Path $pack -PathType Container)) {
+            throw "Missing pack directory: $pack"
+          }
+
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$pkg.version
+          if ($version -ne $env:EXPECTED_VERSION) {
+            throw "package.json version '$version' does not match expected '$env:EXPECTED_VERSION'."
+          }
+
+          $latestPath = Join-Path $pack 'latest.yml'
+          if (-not (Test-Path $latestPath -PathType Leaf)) {
+            throw "Missing updater manifest: $latestPath"
+          }
+          $latestText = Get-Content $latestPath -Raw
+
+          $versionPattern = '(?m)^version:[ \t]*' + [regex]::Escape($version) + '[ \t]*\r?$'
+          if ($latestText -notmatch $versionPattern) {
+            throw "latest.yml version does not match package.json version $version."
+          }
+
+          $filePattern = '(?m)^[ \t]*-[ \t]*url:[ \t]*(?<url>[^\r\n]+?)[ \t]*\r?\n[ \t]*sha512:[ \t]*(?<sha>[^\r\n]+?)[ \t]*\r?\n[ \t]*size:[ \t]*(?<size>\d+)[ \t]*\r?$'
+          $fileMatches = [regex]::Matches($latestText, $filePattern)
+          if ($fileMatches.Count -eq 0) {
+            throw 'latest.yml has no files[] entries.'
+          }
+
+          $latestFiles = @{}
+          foreach ($match in $fileMatches) {
+            $name = $match.Groups['url'].Value.Trim()
+            $expectedFileSha512 = $match.Groups['sha'].Value.Trim()
+            $expectedFileSize = [int64]$match.Groups['size'].Value
+            $filePath = Join-Path $pack $name
+            if (-not (Test-Path $filePath -PathType Leaf)) {
+              throw "latest.yml names a missing file: $name"
+            }
+            $file = Get-Item $filePath
+            if ($file.Length -ne $expectedFileSize) {
+              throw "latest.yml size mismatch for $name ($($file.Length) != $expectedFileSize)."
+            }
+            $actualFileSha512 = Get-Sha512Base64 -Path $file.FullName
+            if ($actualFileSha512 -ne $expectedFileSha512) {
+              throw "latest.yml sha512 mismatch for $name."
+            }
+            $latestFiles[$name] = $true
+          }
+
+          $topPath = [regex]::Match($latestText, '(?m)^path:[ \t]*(?<value>[^\r\n]+?)[ \t]*\r?$')
+          $topSha512 = [regex]::Match($latestText, '(?m)^sha512:[ \t]*(?<value>[^\r\n]+?)[ \t]*\r?$')
+          if (-not $topPath.Success -or -not $topSha512.Success) {
+            throw 'latest.yml is missing top-level path/sha512.'
+          }
+
+          $installerName = $topPath.Groups['value'].Value.Trim()
+          if (-not $latestFiles.ContainsKey($installerName)) {
+            throw "latest.yml top-level path '$installerName' is not listed in files[]."
+          }
+
+          $installerPath = Join-Path $pack $installerName
+          if (-not (Test-Path $installerPath -PathType Leaf)) {
+            throw "latest.yml names a missing installer: $installerName"
+          }
+          $installer = Get-Item $installerPath
+          $installerSha512 = Get-Sha512Base64 -Path $installer.FullName
+          if ($installerSha512 -ne $topSha512.Groups['value'].Value.Trim()) {
+            throw "latest.yml top-level sha512 mismatch for $installerName."
+          }
+          $installerSha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $installers = @(Get-ChildItem $pack -Filter '*.exe' -File | Sort-Object Name)
+          if ($installers.Count -eq 0) {
+            throw 'No Windows installers were produced in pack/.'
+          }
+          $expectedVersionPattern = '^' + [regex]::Escape($version) + '(\.0)?$'
+          foreach ($exe in $installers) {
+            if ($exe.Length -le 0) {
+              throw "Empty installer: $($exe.Name)"
+            }
+            $versionInfo = $exe.VersionInfo
+            if ([string]$versionInfo.FileVersion -notmatch $expectedVersionPattern) {
+              throw "$($exe.Name) FileVersion '$($versionInfo.FileVersion)' != $version."
+            }
+            if ([string]$versionInfo.ProductVersion -notmatch $expectedVersionPattern) {
+              throw "$($exe.Name) ProductVersion '$($versionInfo.ProductVersion)' != $version."
+            }
+          }
+
+          $appUpdateFiles = @(
+            Get-ChildItem $pack -Directory -Filter 'win*-unpacked' |
+              ForEach-Object { Join-Path (Join-Path $_.FullName 'resources') 'app-update.yml' } |
+              Where-Object { Test-Path $_ }
+          )
+          if ($appUpdateFiles.Count -eq 0) {
+            throw 'No win*-unpacked/resources/app-update.yml was produced.'
+          }
+          foreach ($appUpdatePath in $appUpdateFiles) {
+            $appUpdate = Get-Content $appUpdatePath -Raw
+            foreach ($expected in @(@('provider', 'github'), @('owner', 'nathwn12'), @('repo', 'pear-desktop'))) {
+              $key = $expected[0]
+              $value = $expected[1]
+              $pattern = '(?m)^' + [regex]::Escape($key) + ':[ \t]*' + [regex]::Escape($value) + '[ \t]*\r?$'
+              if ($appUpdate -notmatch $pattern) {
+                throw "app-update.yml at $appUpdatePath has $key != $value."
+              }
+            }
+          }
+
+          $artifacts = @()
+          foreach ($file in @(Get-ChildItem $pack -File | Sort-Object Name)) {
+            if ($file.Length -le 0) {
+              throw "Empty artifact: $($file.Name)"
+            }
+            $artifacts += [ordered]@{
+              name = $file.Name
+              bytes = $file.Length
+              sha256 = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+
+          $manifest = [ordered]@{
+            rehearsal = $true
+            dry_run = $true
+            publishing = 'never'
+            producer = 'pnpm dist:win'
+            version = $version
+            expected_version = $env:EXPECTED_VERSION
+            commit = $env:GITHUB_SHA
+            ref = $env:GITHUB_REF
+            repository = $env:GITHUB_REPOSITORY
+            workflow = $env:GITHUB_WORKFLOW
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            event = $env:GITHUB_EVENT_NAME
+            runner_os = $env:RUNNER_OS
+            node = (node --version)
+            pnpm = (pnpm --version)
+            generated_at = (Get-Date).ToUniversalTime().ToString('o')
+            updater = [ordered]@{
+              provider = 'github'
+              owner = 'nathwn12'
+              repo = 'pear-desktop'
+            }
+            installer = [ordered]@{
+              name = $installerName
+              bytes = $installer.Length
+              sha256 = $installerSha256
+              sha512_base64 = $installerSha512
+              file_version = [string]$installer.VersionInfo.FileVersion
+              product_version = [string]$installer.VersionInfo.ProductVersion
+              product_name = [string]$installer.VersionInfo.ProductName
+            }
+            artifacts = @($artifacts)
+          }
+
+          $manifestPath = Join-Path $pack 'rehearsal-manifest.json'
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -Path $manifestPath -Encoding utf8
+
+          $sumLines = @()
+          foreach ($file in @(Get-ChildItem $pack -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name)) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $sumLines += ('{0}  {1}' -f $hash, $file.Name)
+          }
+          $sumsPath = Join-Path $pack 'SHA256SUMS.txt'
+          $sumLines | Set-Content -Path $sumsPath -Encoding utf8
+
+          $summary = @(
+            ('## Pear Desktop {0} rehearsal (dry run)' -f $version),
+            '',
+            'Publishing is disabled: `pnpm dist:win` runs `electron-builder --win -p never`.',
+            'This job has `contents: read`, no GitHub token in the environment, and uploads only a temporary Actions artifact.',
+            '',
+            '| artifact | bytes | sha256 |',
+            '| --- | ---: | --- |'
+          )
+          foreach ($artifact in $artifacts) {
+            $summary += ('| {0} | {1} | `{2}` |' -f $artifact['name'], $artifact['bytes'], $artifact['sha256'])
+          }
+          $summary += ''
+          $summary += ('installer sha512 (base64): `{0}`' -f $installerSha512)
+          $summary += ''
+          $summary += ('commit `{0}` on `{1}`; run `{2}` attempt `{3}`' -f $env:GITHUB_SHA, $env:GITHUB_REF, $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          Write-Host "Verified $($artifacts.Count) produced files; manifest: $manifestPath"
+          Write-Host "Installer: $installerName ($($installer.Length) bytes) sha256=$installerSha256 sha512=$installerSha512"
+          Write-Host "Updater metadata: $($appUpdateFiles.Count) app-update.yml file(s) point at nathwn12/pear-desktop."
+
+      - name: Upload rehearsal artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: pear-rehearsal-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            pack/*.exe
+            pack/*.blockmap
+            pack/*.yml
+            pack/*.7z
+            pack/*.zip
+            pack/rehearsal-manifest.json
+            pack/SHA256SUMS.txt
+          retention-days: 7
+          if-no-files-found: error
