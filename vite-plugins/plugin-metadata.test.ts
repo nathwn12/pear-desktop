@@ -35,15 +35,15 @@ test.describe('plugin default enabled resolution', () => {
   });
 
   test('a later spread overrides an earlier explicit property', () => {
-    expect(
-      readEnabled(wrap('{ enabled: false, ...{ enabled: true } }')),
-    ).toBe(true);
+    expect(readEnabled(wrap('{ enabled: false, ...{ enabled: true } }'))).toBe(
+      true,
+    );
   });
 
   test('an explicit property overrides an earlier spread', () => {
-    expect(
-      readEnabled(wrap('{ ...{ enabled: true }, enabled: false }')),
-    ).toBe(false);
+    expect(readEnabled(wrap('{ ...{ enabled: true }, enabled: false }'))).toBe(
+      false,
+    );
   });
 
   test('the last of three ordered assignments wins', () => {
@@ -93,9 +93,9 @@ export default createPlugin({ config: { enabled: false, ...DEFAULT } });`),
 
   test('a statically known computed key is read like a plain property', () => {
     expect(readEnabled(wrap("{ ['enabled']: false }"))).toBe(false);
-    expect(
-      readEnabled(wrap("{ enabled: false, ['enabled']: true }")),
-    ).toBe(true);
+    expect(readEnabled(wrap("{ enabled: false, ['enabled']: true }"))).toBe(
+      true,
+    );
   });
 
   test('a spread containing a computed key after the last assignment is unknown', () => {

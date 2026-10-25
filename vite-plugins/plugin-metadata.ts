@@ -118,7 +118,14 @@ const resolveModuleFile = (
   specifier: string,
 ): SourceFile | undefined => {
   const base = resolve(sourceFile.getDirectoryPath(), specifier);
-  for (const suffix of ['.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx']) {
+  for (const suffix of [
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '/index.ts',
+    '/index.tsx',
+  ]) {
     const path = (base + suffix).replace(/\\/g, '/');
     const resolved = getProject().addSourceFileAtPathIfExists(path);
     if (resolved) return resolved;
@@ -160,10 +167,13 @@ const resolveIdentifier = (
         }
       }
 
-      const exported = moduleFile.getExportedDeclarations().get(importedName) ?? [];
+      const exported =
+        moduleFile.getExportedDeclarations().get(importedName) ?? [];
       for (const declaration of exported) {
         if (declaration.getKind() === ts.SyntaxKind.VariableDeclaration) {
-          return declaration.asKindOrThrow(ts.SyntaxKind.VariableDeclaration).getInitializer();
+          return declaration
+            .asKindOrThrow(ts.SyntaxKind.VariableDeclaration)
+            .getInitializer();
         }
       }
 
@@ -258,9 +268,7 @@ export const resolveProperty = (
       const initializer = property
         .asKindOrThrow(ts.SyntaxKind.PropertyAssignment)
         .getInitializer();
-      result = initializer
-        ? { kind: 'value', node: initializer }
-        : UNKNOWN;
+      result = initializer ? { kind: 'value', node: initializer } : UNKNOWN;
     } else if (kind === ts.SyntaxKind.ShorthandPropertyAssignment) {
       result = {
         kind: 'value',
@@ -351,9 +359,7 @@ const findPluginDefinition = (
   file: SourceFile,
 ): ObjectLiteralExpression | undefined => {
   const candidates: Node[] = [];
-  const defaultExport = file.getExportAssignment(
-    (ea) => !ea.isExportEquals(),
-  );
+  const defaultExport = file.getExportAssignment((ea) => !ea.isExportEquals());
   if (defaultExport) candidates.push(defaultExport.getExpression());
   candidates.push(...(file.getExportedDeclarations().get('default') ?? []));
 
@@ -428,4 +434,3 @@ export const readPluginMetadata = (
     enabled,
   };
 };
-

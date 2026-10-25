@@ -17,9 +17,9 @@ interface LocaleInfo {
   code: string;
   path: string;
   language: {
-    name?: string;
+    'name'?: string;
     'local-name'?: string;
-    code?: string;
+    'code'?: string;
   } | null;
 }
 
@@ -76,15 +76,15 @@ export const i18nImporter = () => {
       writer.writeLine(
         '/** Loads a single locale, or `null` when it does not exist. */',
       );
-      writer.writeLine(
-        'export const loadLanguage = async (language) => {',
-      );
+      writer.writeLine('export const loadLanguage = async (language) => {');
       writer.writeLine('  const importer = languageImporters[language];');
       writer.writeLine('  if (!importer) return null;');
       writer.writeLine('');
       writer.writeLine('  const mod = await importer();');
       writer.writeLine('');
-      writer.writeLine('  return { [language]: { translation: mod.default } };');
+      writer.writeLine(
+        '  return { [language]: { translation: mod.default } };',
+      );
       writer.writeLine('};');
     },
     { overwrite: true },

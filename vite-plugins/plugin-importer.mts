@@ -5,12 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { globSync } from 'glob';
 import { Project } from 'ts-morph';
 
+import { readPluginMetadata, type PluginMetadata } from './plugin-metadata';
+
 // HACK: DO NOT USE @ ALIAS IN THIS FILE, IT WILL CAUSE PROBLEMS
 import { Platform } from '../src/types/plugins';
-
-import { readPluginMetadata } from './plugin-metadata';
-
-import type { PluginMetadata } from './plugin-metadata';
 
 const kebabToCamel = (text: string) =>
   text.replace(/-(\w)/g, (_, letter: string) => letter.toUpperCase());
@@ -55,9 +53,13 @@ export const pluginVirtualModuleGenerator = (
     const absolutePath = resolve(srcPath, '..', path).replace(/\\/g, '/');
     const sourceFile =
       globalProject.addSourceFileAtPathIfExists(absolutePath) ??
-      globalProject.createSourceFile(absolutePath, readFileSync(absolutePath, 'utf8'), {
-        overwrite: true,
-      });
+      globalProject.createSourceFile(
+        absolutePath,
+        readFileSync(absolutePath, 'utf8'),
+        {
+          overwrite: true,
+        },
+      );
 
     const pluginMetadata = readPluginMetadata(sourceFile);
     if (!pluginMetadata) {
@@ -89,9 +91,7 @@ export const pluginVirtualModuleGenerator = (
         writer.blankLine();
       }
 
-      writer.writeLine(
-        `export const pluginMeta = ${serialize(metadata)};`,
-      );
+      writer.writeLine(`export const pluginMeta = ${serialize(metadata)};`);
       writer.writeLine(
         `export const pluginIds = ${serialize(plugins.map(({ name }) => name))};`,
       );
@@ -171,7 +171,9 @@ export const pluginVirtualModuleGenerator = (
         `  const entries = await Promise.all(pluginIdsFor('${checkMode}').map(async (id) => {`,
       );
       writer.writeLine('    const plugin = (await importPlugin(id))?.default;');
-      writer.writeLine("    return plugin && isPluginSupported(plugin) ? [id, plugin] : null;");
+      writer.writeLine(
+        '    return plugin && isPluginSupported(plugin) ? [id, plugin] : null;',
+      );
       writer.writeLine('  }));');
       writer.writeLine('  return Object.fromEntries(entries.filter(Boolean));');
       writer.writeLine('};');
@@ -179,9 +181,15 @@ export const pluginVirtualModuleGenerator = (
 
       // All plugins export (stub only)
       writer.writeLine('export const allPlugins = async () => {');
-      writer.writeLine('  const entries = await Promise.all(pluginIds.map(async (id) => {');
-      writer.writeLine('    const stub = (await importPlugin(id))?.pluginStub;');
-      writer.writeLine("    return stub && isPluginSupported(stub) ? [id, stub] : null;");
+      writer.writeLine(
+        '  const entries = await Promise.all(pluginIds.map(async (id) => {',
+      );
+      writer.writeLine(
+        '    const stub = (await importPlugin(id))?.pluginStub;',
+      );
+      writer.writeLine(
+        '    return stub && isPluginSupported(stub) ? [id, stub] : null;',
+      );
       writer.writeLine('  }));');
       writer.writeLine('  return Object.fromEntries(entries.filter(Boolean));');
       writer.writeLine('};');
