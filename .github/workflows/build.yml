@@ -11,7 +11,7 @@ on:
         type: boolean
         default: true
       expected_version:
-        description: "Version the rehearsal must build and verify."
+        description: "Version the rehearsal must build and verify (authorized: 3.12.4)."
         required: true
         type: string
         default: "3.12.4"
@@ -25,13 +25,15 @@ jobs:
   build:
     permissions:
       contents: write
+    # Production build/release path. A manual dispatch must never reach it, so
+    # the upstream-gated `pnpm release:*` steps below stay push-only.
     if: github.event_name != 'workflow_dispatch' && github.event.pull_request.draft == false
     name: Build Pear Desktop
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
-        os: [ windows-latest ]
+        os: [ macos-26, ubuntu-latest, windows-latest ]
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -43,10 +45,17 @@ jobs:
           run_install: false
 
       - name: Setup NodeJS
+        if: startsWith(matrix.os, 'macOS') != true
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
+
+      - name: Setup NodeJS for macOS
+        if: startsWith(matrix.os, 'macOS')
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -57,7 +66,29 @@ jobs:
         run: |
           pnpm build
 
-      # Build and release only on an upstream push; workflow_dispatch must never publish.
+      # Build and release if it is the main repository and is not pull-request.
+      # Push-only, so workflow_dispatch can never reach a release step.
+      - name: Build and release on Mac
+        if: startsWith(matrix.os, 'macOS') && (github.repository == 'pear-devs/pear-desktop' && github.event_name == 'push')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pnpm release:mac
+
+      - name: Build and release on Linux
+        if: startsWith(matrix.os, 'ubuntu') && (github.repository == 'pear-devs/pear-desktop' && github.event_name == 'push')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo snap install snapcraft --classic
+          sudo apt update
+          sudo apt install -y flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y flathub org.freedesktop.Platform/x86_64/24.08
+          sudo flatpak install -y flathub org.freedesktop.Sdk/x86_64/24.08
+          sudo flatpak install -y flathub org.electronjs.Electron2.BaseApp/x86_64/24.08
+          pnpm release:linux
+
       - name: Build and release on Windows
         if: startsWith(matrix.os, 'windows') && (github.repository == 'pear-devs/pear-desktop' && github.event_name == 'push')
         env:
@@ -78,6 +109,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     name: Release Pear Desktop
+    # Upstream release only, and only from a push to master.
     if: github.event_name == 'push' && github.repository == 'pear-devs/pear-desktop' && github.ref == 'refs/heads/master'
     needs: build
     steps:
@@ -92,10 +124,17 @@ jobs:
           run_install: false
 
       - name: Setup NodeJS
+        if: startsWith(matrix.os, 'macOS') != true
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
+
+      - name: Setup NodeJS for macOS
+        if: startsWith(matrix.os, 'macOS')
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -152,20 +191,24 @@ jobs:
           commit_user_name: CI
           commit_user_email: th-ch@users.noreply.github.com
 
-  # Manual, non-publishing rehearsal for the fork. This is the only job
-  # reachable from workflow_dispatch: the build and release jobs above are
-  # gated to `push`. It runs the same producer as the PR artifact workflow
-  # (`pnpm dist:win` -> electron-builder -p never), runs the release gates,
-  # proves the produced files, and uploads a temporary Actions artifact only.
-  # It never creates a tag or release and never uploads a release asset.
+  # Manual, non-publishing release rehearsal for the fork. This is the only job
+  # reachable from workflow_dispatch, and only for the authorized branch: any
+  # other ref is a no-op. `build` and `release` above are gated to `push`.
+  # It runs the producer already used by the PR artifact workflow
+  # (`pnpm dist:win` -> `electron-builder --win -p never`), runs the source
+  # gates and tests, verifies the produced updater/installer metadata and
+  # hashes, and uploads a temporary Actions artifact only. It holds no secret,
+  # has `contents: read`, and never creates a tag, release, or release asset.
   rehearsal:
     name: Rehearsal (dry run, no publish)
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'nathwn12/pear-desktop' &&
-      github.ref_type == 'branch'
+      github.ref_type == 'branch' &&
+      github.ref_name == 'feat/pear-main' &&
+      inputs.dry_run == true
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -181,11 +224,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # Fail closed on anything but the one authorized manual rehearsal.
           if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
             throw "Refusing to run: event is '$env:GITHUB_EVENT_NAME', not workflow_dispatch."
           }
           if ($env:GITHUB_REF_TYPE -ne 'branch') {
             throw "Refusing to run: ref type is '$env:GITHUB_REF_TYPE', not branch."
+          }
+          if ($env:GITHUB_REF_NAME -ne 'feat/pear-main') {
+            throw "Refusing to run: branch is '$env:GITHUB_REF_NAME', not the authorized feat/pear-main."
           }
           if ($env:GITHUB_REPOSITORY -ne 'nathwn12/pear-desktop') {
             throw "Refusing to run on repository '$env:GITHUB_REPOSITORY'."
@@ -193,15 +240,22 @@ jobs:
           if ($env:DRY_RUN -ne 'true') {
             throw "Refusing to run: dry_run is '$env:DRY_RUN', not true."
           }
+          if ($env:EXPECTED_VERSION -ne '3.12.4') {
+            throw "Refusing to run: expected_version is '$env:EXPECTED_VERSION', not the authorized 3.12.4."
+          }
           if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) {
-            throw 'Refusing to run with a GitHub token in the environment.'
+            throw 'Refusing to run: a GitHub token is present in the environment; this path must hold no publish credential.'
           }
 
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           $version = [string]$pkg.version
+          $repository = [string]$pkg.repository
           $distScript = [string]$pkg.scripts.'dist:win'
           $releaseScript = [string]$pkg.scripts.'release:win'
 
+          if ($repository -ne 'nathwn12/pear-desktop') {
+            throw "package.json repository is '$repository', not the fork nathwn12/pear-desktop."
+          }
           if ($version -ne $env:EXPECTED_VERSION) {
             throw "package.json version '$version' does not match expected '$env:EXPECTED_VERSION'."
           }
@@ -249,7 +303,7 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
         run: pnpm test:debug
 
-      - name: Verify artifact metadata, hashes, and manifest
+      - name: Verify artifact metadata, hashes, and updater manifests
         shell: pwsh
         env:
           EXPECTED_VERSION: ${{ inputs.expected_version }}
@@ -273,6 +327,108 @@ jobs:
             }
           }
 
+          # Top-level scalar, e.g. `version: 3.12.4` or `path: Foo.exe`.
+          function Get-TopLevelScalar {
+            param([string]$Text, [string]$Key)
+            $m = [regex]::Match($Text, '(?m)^' + [regex]::Escape($Key) + ':[ \t]*(?<value>[^\r\n]*?)[ \t]*\r?$')
+            if (-not $m.Success) {
+              return $null
+            }
+            return $m.Groups['value'].Value.Trim()
+          }
+
+          # `files:` entries look like:
+          #   - url: Foo.exe
+          #     sha512: <base64>
+          #     size: 123 (optional; nsis-web omits it)
+          function Get-SequenceEntries {
+            param([string]$Text, [string]$Section)
+            $start = [regex]::Match($Text, '(?m)^' + [regex]::Escape($Section) + ':[ \t]*\r?$')
+            if (-not $start.Success) {
+              return $null
+            }
+            $rest = $Text.Substring($start.Index + $start.Length)
+            $items = [System.Collections.Generic.List[object]]::new()
+            $current = $null
+            foreach ($line in ($rest -split "`r?`n")) {
+              if ($line -match '^\S') {
+                break
+              }
+              if ($line -match '^  - (?<name>[^:]+):[ \t]*(?<value>[^\r\n]*?)[ \t]*$') {
+                $current = [ordered]@{}
+                $current[$Matches['name'].Trim()] = $Matches['value']
+                $items.Add($current)
+                continue
+              }
+              if ($null -ne $current -and $line -match '^    (?<name>[^:]+):[ \t]*(?<value>[^\r\n]*?)[ \t]*$') {
+                $current[$Matches['name'].Trim()] = $Matches['value']
+              }
+            }
+            return , $items
+          }
+
+          # `packages:` is a map of arch -> map, e.g.
+          #   x64:
+          #     file: Foo-x64.nsis.7z
+          #     path: Foo-x64.nsis.7z
+          #     sha512: <base64>
+          #     size: 123
+          function Get-MapOfMaps {
+            param([string]$Text, [string]$Section)
+            $start = [regex]::Match($Text, '(?m)^' + [regex]::Escape($Section) + ':[ \t]*\r?$')
+            if (-not $start.Success) {
+              return $null
+            }
+            $rest = $Text.Substring($start.Index + $start.Length)
+            $entries = [ordered]@{}
+            $current = $null
+            foreach ($line in ($rest -split "`r?`n")) {
+              if ($line -match '^\S') {
+                break
+              }
+              if ($line -match '^  - ') {
+                continue
+              }
+              if ($line -match '^  (?<name>[^\s:#][^:]*):[ \t]*(?<value>[^\r\n]*?)[ \t]*$') {
+                $current = $Matches['name'].Trim()
+                $entries[$current] = [ordered]@{}
+                if ($Matches['value'] -ne '') {
+                  $entries[$current]['value'] = $Matches['value']
+                }
+                continue
+              }
+              if ($null -ne $current -and $line -match '^    (?<name>[^:]+):[ \t]*(?<value>[^\r\n]*?)[ \t]*$') {
+                $entries[$current][$Matches['name'].Trim()] = $Matches['value']
+              }
+            }
+            return $entries
+          }
+
+          function Assert-ReferencedFile {
+            param([string]$Name, [string]$Sha512, $Size)
+            if ([string]::IsNullOrWhiteSpace($Name)) {
+              throw 'latest.yml contains an empty file reference.'
+            }
+            if ([string]::IsNullOrWhiteSpace($Sha512)) {
+              throw "latest.yml entry '$Name' has no sha512."
+            }
+            $path = Join-Path $pack $Name
+            if (-not (Test-Path $path -PathType Leaf)) {
+              throw "latest.yml names a missing file: $Name"
+            }
+            $file = Get-Item $path
+            if ($null -ne $Size -and "$Size" -ne '') {
+              if ($file.Length -ne [int64]$Size) {
+                throw "latest.yml size mismatch for $Name ($($file.Length) != $Size)."
+              }
+            }
+            $actual = Get-Sha512Base64 -Path $file.FullName
+            if ($actual -ne $Sha512) {
+              throw "latest.yml sha512 mismatch for $Name."
+            }
+            return $file
+          }
+
           $pack = Join-Path (Get-Location) 'pack'
           if (-not (Test-Path $pack -PathType Container)) {
             throw "Missing pack directory: $pack"
@@ -290,64 +446,65 @@ jobs:
           }
           $latestText = Get-Content $latestPath -Raw
 
-          $versionPattern = '(?m)^version:[ \t]*' + [regex]::Escape($version) + '[ \t]*\r?$'
-          if ($latestText -notmatch $versionPattern) {
-            throw "latest.yml version does not match package.json version $version."
+          $manifestVersion = Get-TopLevelScalar -Text $latestText -Key 'version'
+          if ($manifestVersion -ne $version) {
+            throw "latest.yml version '$manifestVersion' does not match package.json version '$version'."
           }
 
-          $filePattern = '(?m)^[ \t]*-[ \t]*url:[ \t]*(?<url>[^\r\n]+?)[ \t]*\r?\n[ \t]*sha512:[ \t]*(?<sha>[^\r\n]+?)[ \t]*\r?\n[ \t]*size:[ \t]*(?<size>\d+)[ \t]*\r?$'
-          $fileMatches = [regex]::Matches($latestText, $filePattern)
-          if ($fileMatches.Count -eq 0) {
+          $verifiedFiles = [System.Collections.Generic.List[string]]::new()
+          $fileEntries = Get-SequenceEntries -Text $latestText -Section 'files'
+          if ($null -eq $fileEntries -or $fileEntries.Count -eq 0) {
             throw 'latest.yml has no files[] entries.'
           }
-
-          $latestFiles = @{}
-          foreach ($match in $fileMatches) {
-            $name = $match.Groups['url'].Value.Trim()
-            $expectedFileSha512 = $match.Groups['sha'].Value.Trim()
-            $expectedFileSize = [int64]$match.Groups['size'].Value
-            $filePath = Join-Path $pack $name
-            if (-not (Test-Path $filePath -PathType Leaf)) {
-              throw "latest.yml names a missing file: $name"
+          foreach ($entry in $fileEntries) {
+            $size = $null
+            if ($entry.Contains('size')) {
+              $size = $entry['size']
             }
-            $file = Get-Item $filePath
-            if ($file.Length -ne $expectedFileSize) {
-              throw "latest.yml size mismatch for $name ($($file.Length) != $expectedFileSize)."
-            }
-            $actualFileSha512 = Get-Sha512Base64 -Path $file.FullName
-            if ($actualFileSha512 -ne $expectedFileSha512) {
-              throw "latest.yml sha512 mismatch for $name."
-            }
-            $latestFiles[$name] = $true
+            $referenced = Assert-ReferencedFile -Name ([string]$entry['url']) -Sha512 ([string]$entry['sha512']) -Size $size
+            $verifiedFiles.Add($referenced.Name)
           }
 
-          $topPath = [regex]::Match($latestText, '(?m)^path:[ \t]*(?<value>[^\r\n]+?)[ \t]*\r?$')
-          $topSha512 = [regex]::Match($latestText, '(?m)^sha512:[ \t]*(?<value>[^\r\n]+?)[ \t]*\r?$')
-          if (-not $topPath.Success -or -not $topSha512.Success) {
+          $topPath = Get-TopLevelScalar -Text $latestText -Key 'path'
+          $topSha512 = Get-TopLevelScalar -Text $latestText -Key 'sha512'
+          if ([string]::IsNullOrWhiteSpace($topPath) -or [string]::IsNullOrWhiteSpace($topSha512)) {
             throw 'latest.yml is missing top-level path/sha512.'
           }
-
-          $installerName = $topPath.Groups['value'].Value.Trim()
-          if (-not $latestFiles.ContainsKey($installerName)) {
-            throw "latest.yml top-level path '$installerName' is not listed in files[]."
+          if (-not $verifiedFiles.Contains($topPath)) {
+            throw "latest.yml top-level path '$topPath' is not listed in files[]."
           }
-
-          $installerPath = Join-Path $pack $installerName
-          if (-not (Test-Path $installerPath -PathType Leaf)) {
-            throw "latest.yml names a missing installer: $installerName"
-          }
-          $installer = Get-Item $installerPath
-          $installerSha512 = Get-Sha512Base64 -Path $installer.FullName
-          if ($installerSha512 -ne $topSha512.Groups['value'].Value.Trim()) {
-            throw "latest.yml top-level sha512 mismatch for $installerName."
-          }
+          $installer = Assert-ReferencedFile -Name $topPath -Sha512 $topSha512 -Size $null
+          $installerSha512 = $topSha512
           $installerSha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          # nsis-web installs download these per-arch payloads; each must match.
+          $verifiedPackages = [System.Collections.Generic.List[string]]::new()
+          $packages = Get-MapOfMaps -Text $latestText -Section 'packages'
+          if ($null -ne $packages -and $packages.Count -gt 0) {
+            foreach ($arch in $packages.Keys) {
+              $entry = $packages[$arch]
+              $name = [string]$entry['file']
+              if ([string]::IsNullOrWhiteSpace($name)) {
+                $name = [string]$entry['path']
+              }
+              $size = $null
+              if ($entry.Contains('size')) {
+                $size = $entry['size']
+              }
+              $referenced = Assert-ReferencedFile -Name $name -Sha512 ([string]$entry['sha512']) -Size $size
+              $verifiedPackages.Add($referenced.Name)
+              Write-Host "latest.yml package $arch -> $name ($($referenced.Length) bytes)"
+            }
+          }
+          if ($verifiedPackages.Count -eq 0) {
+            throw 'latest.yml has no packages[] entries for the nsis-web installer payloads.'
+          }
 
           $installers = @(Get-ChildItem $pack -Filter '*.exe' -File | Sort-Object Name)
           if ($installers.Count -eq 0) {
             throw 'No Windows installers were produced in pack/.'
           }
-          $expectedVersionPattern = '^' + [regex]::Escape($version) + '(\.0)?$'
+          $expectedVersionPattern = '^' + [regex]::Escape($version) + '(\.0+)?$'
           foreach ($exe in $installers) {
             if ($exe.Length -le 0) {
               throw "Empty installer: $($exe.Name)"
@@ -415,9 +572,11 @@ jobs:
               provider = 'github'
               owner = 'nathwn12'
               repo = 'pear-desktop'
+              manifest_files = @($verifiedFiles)
+              manifest_packages = @($verifiedPackages)
             }
             installer = [ordered]@{
-              name = $installerName
+              name = $installer.Name
               bytes = $installer.Length
               sha256 = $installerSha256
               sha512_base64 = $installerSha512
@@ -458,8 +617,8 @@ jobs:
           $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
           Write-Host "Verified $($artifacts.Count) produced files; manifest: $manifestPath"
-          Write-Host "Installer: $installerName ($($installer.Length) bytes) sha256=$installerSha256 sha512=$installerSha512"
-          Write-Host "Updater metadata: $($appUpdateFiles.Count) app-update.yml file(s) point at nathwn12/pear-desktop."
+          Write-Host "Installer: $($installer.Name) ($($installer.Length) bytes) sha256=$installerSha256 sha512=$installerSha512"
+          Write-Host "Updater packages verified: $($verifiedPackages.Count); app-update.yml files: $($appUpdateFiles.Count), all nathwn12/pear-desktop."
 
       - name: Upload rehearsal artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
@@ -468,9 +627,8 @@ jobs:
           path: |
             pack/*.exe
             pack/*.blockmap
-            pack/*.yml
             pack/*.7z
-            pack/*.zip
+            pack/*.yml
             pack/rehearsal-manifest.json
             pack/SHA256SUMS.txt
           retention-days: 7
