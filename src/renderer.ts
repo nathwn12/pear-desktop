@@ -4,6 +4,7 @@ import 'mdui/mdui.css';
 import 'mdui';
 
 import { loadI18n, setLanguage, t as i18t } from '@/i18n';
+import { publishAudioGraphReady } from '@/providers/audio-graph-ready';
 import {
   defaultTrustedTypePolicy,
   registerWindowDefaultTrustedTypePolicy,
@@ -302,9 +303,24 @@ async function onApiLoaded() {
   );
 
   const video = document.querySelector('video')!;
-  const audioContext = new AudioContext();
-  const audioSource = audioContext.createMediaElementSource(video);
-  audioSource.connect(audioContext.destination);
+
+  let audioGraph: {
+    audioContext: AudioContext;
+    audioSource: MediaElementAudioSourceNode;
+  } | null = null;
+
+  // Built on first access only: when no audio plugin is enabled the graph (and
+  // its AudioContext) is never created, which is what used to cost startup time.
+  const getAudioGraph = () => {
+    if (!audioGraph) {
+      const audioContext = new AudioContext();
+      const audioSource = audioContext.createMediaElementSource(video);
+      audioSource.connect(audioContext.destination);
+      audioGraph = { audioContext, audioSource };
+    }
+
+    return audioGraph;
+  };
 
   for (const [id, plugin] of Object.entries(getAllLoadedRendererPlugins())) {
     if (typeof plugin.renderer !== 'function') {
@@ -323,14 +339,14 @@ async function onApiLoaded() {
   }
 
   const audioCanPlayEventDispatcher = () => {
-    document.dispatchEvent(
-      new CustomEvent('peard:audio-can-play', {
-        detail: {
-          audioContext,
-          audioSource,
-        },
-      }),
-    );
+    publishAudioGraphReady({
+      get audioContext() {
+        return getAudioGraph().audioContext;
+      },
+      get audioSource() {
+        return getAudioGraph().audioSource;
+      },
+    });
   };
 
   const loadstartListener = () => {
@@ -428,8 +444,9 @@ const definePearTransElements = () => {
 };
 
 const preload = async () => {
-  await loadI18n();
-  await setLanguage(window.mainConfig.get('options.language') ?? 'en');
+  const language = window.mainConfig.get('options.language') ?? 'en';
+  await loadI18n(language);
+  await setLanguage(language);
   window.i18n = {
     t: i18t.bind(i18next),
   };

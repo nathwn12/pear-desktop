@@ -1,22 +1,21 @@
-import { deepmerge } from 'deepmerge-ts';
-import { allPlugins } from 'virtual:plugins';
+import { importPlugin, pluginMeta } from 'virtual:plugins';
 
 import { restart } from '@/providers/app-controls';
+import { resolvePluginEnabled, type PluginConfig } from '@/types/plugins';
 
 import { store } from './store';
-
-import type { PluginConfig } from '@/types/plugins';
 
 export function getPlugins() {
   return store.get('plugins') as Record<string, PluginConfig>;
 }
 
 export async function isEnabled(plugin: string) {
-  const pluginConfig = deepmerge(
-    (await allPlugins())[plugin]?.config ?? { enabled: false },
-    (store.get('plugins') as Record<string, PluginConfig>)[plugin] ?? {},
+  // Same policy as the main/renderer loaders, in one neutral module.
+  return resolvePluginEnabled(
+    pluginMeta[plugin]?.enabled ?? null,
+    getPlugins()[plugin],
+    () => importPlugin(plugin),
   );
-  return pluginConfig !== undefined && pluginConfig.enabled;
 }
 
 /**

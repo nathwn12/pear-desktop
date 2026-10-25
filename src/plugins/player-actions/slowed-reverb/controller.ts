@@ -435,10 +435,18 @@ export function createSlowedReverbController(): SlowedReverbController {
      * (teardownAudio() does not drop it) so a rise from 0 rebuilds in place.
      */
     syncWetTap() {
+      if (!isReverbEngaged(this.getCurrent())) {
+        this.workletFailed = false;
+        this.teardownAudio();
+        return;
+      }
+      // Read the announced graph only while the reverb is audible: the detail
+      // exposes lazy getters, and touching them builds the AudioContext. The
+      // central snapshot stays available for the next engagement.
       const announced = getLatestAudioDetail();
       const audioContext = this.audioContext ?? announced?.audioContext;
       const audioSource = this.audioSource ?? announced?.audioSource;
-      if (isReverbEngaged(this.getCurrent()) && audioContext && audioSource) {
+      if (audioContext && audioSource) {
         this.wireAudio(audioContext, audioSource);
         return;
       }
@@ -450,6 +458,10 @@ export function createSlowedReverbController(): SlowedReverbController {
     },
 
     handleAudioEvent(event: Event) {
+      // Reading the detail's getters builds the audio graph; skip that while
+      // the reverb is silent. The central snapshot keeps the graph replayable.
+      if (!isReverbEngaged(this.getCurrent())) return;
+
       const detail = (event as CustomEvent<AudioCanPlayDetail>).detail;
       if (!detail?.audioContext || !detail?.audioSource) return;
       // Record the announced graph even while the reverb is silent: the lazy

@@ -9,10 +9,10 @@ import {
   shell,
 } from 'electron';
 import { satisfies } from 'semver';
-import { languageResources } from 'virtual:i18n';
+import { languageMeta } from 'virtual:i18n';
 import { allPlugins } from 'virtual:plugins';
 
-import { APPLICATION_NAME, setLanguage, t } from '@/i18n';
+import { APPLICATION_NAME, applyLanguage, t } from '@/i18n';
 
 import * as config from './config';
 import { getAllMenuTemplate, loadAllMenuPlugins } from './loader/menu';
@@ -146,8 +146,7 @@ export const mainMenuTemplate = async (
       }),
   );
 
-  const langResources = await languageResources();
-  const availableLanguages = Object.keys(langResources);
+  const availableLanguages = Object.keys(languageMeta);
 
   return [
     {
@@ -481,13 +480,14 @@ export const mainMenuTemplate = async (
             availableLanguages
               .map(
                 (lang): Electron.MenuItemConstructorOptions => ({
-                  label: `${langResources[lang].translation.language?.name ?? 'Unknown'} (${langResources[lang].translation.language?.['local-name'] ?? 'Unknown'})`,
+                  label: `${languageMeta[lang].name ?? 'Unknown'} (${languageMeta[lang].localName ?? 'Unknown'})`,
                   type: 'checkbox',
                   checked: (config.get('options.language') ?? 'en') === lang,
-                  click() {
+                  async click() {
                     config.setMenuOption('options.language', lang);
-                    refreshMenu(win);
-                    setLanguage(lang);
+                    // Menu labels are translated: rebuild only after the new
+                    // language (and its parent-locale fallbacks) is loaded.
+                    await applyLanguage(lang, () => refreshMenu(win));
                     dialog.showMessageBox(win, {
                       title: t(
                         'main.menu.options.submenu.language.dialog.title',

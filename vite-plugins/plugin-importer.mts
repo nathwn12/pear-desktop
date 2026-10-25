@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { basename, resolve, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +7,10 @@ import { Project } from 'ts-morph';
 
 // HACK: DO NOT USE @ ALIAS IN THIS FILE, IT WILL CAUSE PROBLEMS
 import { Platform } from '../src/types/plugins';
+
+import { readPluginMetadata } from './plugin-metadata';
+
+import type { PluginMetadata } from './plugin-metadata';
 
 const kebabToCamel = (text: string) =>
   text.replace(/-(\w)/g, (_, letter: string) => letter.toUpperCase());
@@ -17,6 +22,8 @@ const globalProject = new Project({
   skipLoadingLibFiles: true,
   skipFileDependencyResolution: true,
 });
+
+const serialize = (value: unknown) => JSON.stringify(value);
 
 export const pluginVirtualModuleGenerator = (
   mode: 'main' | 'preload' | 'renderer',
@@ -43,110 +50,144 @@ export const pluginVirtualModuleGenerator = (
     return { name, path };
   });
 
+  const metadata: Record<string, PluginMetadata> = {};
+  for (const { name, path } of plugins) {
+    const absolutePath = resolve(srcPath, '..', path).replace(/\\/g, '/');
+    const sourceFile =
+      globalProject.addSourceFileAtPathIfExists(absolutePath) ??
+      globalProject.createSourceFile(absolutePath, readFileSync(absolutePath, 'utf8'), {
+        overwrite: true,
+      });
+
+    const pluginMetadata = readPluginMetadata(sourceFile);
+    if (!pluginMetadata) {
+      // Unknown shape: stay lazy-safe by deferring every decision to the module
+      // itself (the loaders then import it and apply the runtime checks).
+      console.warn(
+        `[plugin-importer] could not read the plugin definition of ${path}; falling back to runtime resolution`,
+      );
+      metadata[name] = {
+        backend: true,
+        preload: true,
+        renderer: true,
+        platform: null,
+        platformResolved: false,
+        enabled: null,
+      };
+      continue;
+    }
+
+    metadata[name] = pluginMetadata;
+  }
+
   const src = globalProject.createSourceFile(
     'vm:pluginIndexes',
     (writer) => {
-      for (const { name, path } of plugins) {
-        const absolutePath = resolve(srcPath, '..', path).replace(/\\/g, '/');
-        if (mode === 'main') {
-          // dynamic import (for main)
-          writer.writeLine(
-            `const ${kebabToCamel(name)}PluginImport = () => import('${absolutePath}');`,
-          );
-          writer.writeLine(
-            `const ${kebabToCamel(name)}Plugin = async () => (await ${kebabToCamel(name)}PluginImport()).default;`,
-          );
-          writer.writeLine(
-            `const ${kebabToCamel(name)}PluginStub = async () => (await ${kebabToCamel(name)}PluginImport()).pluginStub;`,
-          );
-        } else {
-          // static import (preload does not support dynamic import)
-          writer.writeLine(
-            `import ${kebabToCamel(name)}PluginImport, { pluginStub as ${kebabToCamel(name)}PluginStubImport } from "${absolutePath}";`,
-          );
-          writer.writeLine(
-            `const ${kebabToCamel(name)}Plugin = () => Promise.resolve(${kebabToCamel(name)}PluginImport);`,
-          );
-          writer.writeLine(
-            `const ${kebabToCamel(name)}PluginStub = () => Promise.resolve(${kebabToCamel(name)}PluginStubImport);`,
-          );
-        }
-      }
-
-      writer.blankLine();
       if (mode === 'main' || mode === 'preload') {
         writer.writeLine("import is from 'electron-is';");
         writer.writeLine('globalThis.electronIs = is;');
+        writer.blankLine();
       }
-      writer.write(supportsPlatform.toString());
+
+      writer.writeLine(
+        `export const pluginMeta = ${serialize(metadata)};`,
+      );
+      writer.writeLine(
+        `export const pluginIds = ${serialize(plugins.map(({ name }) => name))};`,
+      );
       writer.blankLine();
 
-      // Context-specific exports
-      writer.writeLine(`let ${mode}PluginsCache = null;`);
+      // Emitted as plain JavaScript (the virtual module is parsed as JS).
+      writer.writeLine('function supportsPlatform({ platform }) {');
+      writer.writeLine("  if (typeof platform !== 'number') return true;");
+      writer.writeLine('  const is = globalThis.electronIs;');
+      writer.writeLine(
+        `  if (is.windows()) return (platform & ${Platform.Windows}) !== 0;`,
+      );
+      writer.writeLine(
+        `  if (is.macOS()) return (platform & ${Platform.macOS}) !== 0;`,
+      );
+      writer.writeLine(
+        `  if (is.linux()) return (platform & ${Platform.Linux}) !== 0;`,
+      );
+      writer.writeLine(
+        `  if (is.freebsd()) return (platform & ${Platform.Freebsd}) !== 0;`,
+      );
+      writer.writeLine('');
+      writer.writeLine('  // unknown platform');
+      writer.writeLine('  return false;');
+      writer.writeLine('}');
+      writer.blankLine();
+      writer.writeLine('export const isPluginSupported = supportsPlatform;');
+      writer.blankLine();
+
+      writer.writeLine('export const pluginIdsFor = (kind) =>');
+      writer.writeLine('  pluginIds.filter((id) => {');
+      writer.writeLine('    const meta = pluginMeta[id];');
+      writer.writeLine('    if (!meta || !meta[kind]) return false;');
+      writer.writeLine('    return meta.platformResolved');
+      writer.writeLine('      ? isPluginSupported(meta)');
+      writer.writeLine('      : true;');
+      writer.writeLine('  });');
+      writer.blankLine();
+
+      // Per-plugin importers, keyed by id so a plugin can be loaded on its own.
+      if (mode === 'main' || mode === 'renderer') {
+        writer.writeLine('const pluginImporters = {');
+        for (const { name, path } of plugins) {
+          const absolutePath = resolve(srcPath, '..', path).replace(/\\/g, '/');
+          writer.writeLine(`  "${name}": () => import('${absolutePath}'),`);
+        }
+        writer.writeLine('};');
+      } else {
+        // preload does not support dynamic import, so reuse the static imports
+        for (const { name, path } of plugins) {
+          const absolutePath = resolve(srcPath, '..', path).replace(/\\/g, '/');
+          writer.writeLine(
+            `import ${kebabToCamel(name)}PluginImport, { pluginStub as ${kebabToCamel(name)}PluginStubImport } from "${absolutePath}";`,
+          );
+        }
+        writer.blankLine();
+        writer.writeLine('const pluginImporters = {');
+        for (const { name } of plugins) {
+          const camelName = kebabToCamel(name);
+          writer.writeLine(
+            `  "${name}": () => Promise.resolve({ default: ${camelName}PluginImport, pluginStub: ${camelName}PluginStubImport }),`,
+          );
+        }
+        writer.writeLine('};');
+      }
+      writer.blankLine();
+
+      writer.writeLine(
+        'export const importPlugin = (id) => pluginImporters[id]?.();',
+      );
+      writer.blankLine();
+
+      // Context-specific aggregate, kept for the preload/main menus
+      const checkMode = mode === 'main' ? 'backend' : mode;
       writer.writeLine(`export const ${mode}Plugins = async () => {`);
       writer.writeLine(
-        `  if (${mode}PluginsCache) return await ${mode}PluginsCache;`,
+        `  const entries = await Promise.all(pluginIdsFor('${checkMode}').map(async (id) => {`,
       );
-      writer.writeLine(
-        '  const { promise, resolve } = Promise.withResolvers();',
-      );
-      writer.writeLine('  ' + `${mode}PluginsCache = promise;`);
-      writer.writeLine('  const pluginEntries = await Promise.all([');
-      for (const { name } of plugins) {
-        const checkMode = mode === 'main' ? 'backend' : mode;
-        // HACK: To avoid situation like importing renderer plugins in main
-        writer.writeLine(
-          `    ${kebabToCamel(name)}Plugin().then((plg) => plg['${checkMode}'] ? ["${name}", plg] : null),`,
-        );
-      }
-      writer.writeLine('  ]);');
-      writer.writeLine(
-        '  resolve(pluginEntries.filter((entry) => entry && supportsPlatform(entry[1])).reduce((acc, [name, plg]) => { acc[name] = plg; return acc; }, {}));',
-      );
-      writer.writeLine(`  return await ${mode}PluginsCache;`);
+      writer.writeLine('    const plugin = (await importPlugin(id))?.default;');
+      writer.writeLine("    return plugin && isPluginSupported(plugin) ? [id, plugin] : null;");
+      writer.writeLine('  }));');
+      writer.writeLine('  return Object.fromEntries(entries.filter(Boolean));');
       writer.writeLine('};');
       writer.blankLine();
 
-      // All plugins export (stub only) // Omit<Plugin, 'backend' | 'preload' | 'renderer'>
-      writer.writeLine('let allPluginsCache = null;');
+      // All plugins export (stub only)
       writer.writeLine('export const allPlugins = async () => {');
-      writer.writeLine('  if (allPluginsCache) return await allPluginsCache;');
-      writer.writeLine(
-        '  const { promise, resolve } = Promise.withResolvers();',
-      );
-      writer.writeLine('  allPluginsCache = promise;');
-      writer.writeLine('  const stubEntries = await Promise.all([');
-      for (const { name } of plugins) {
-        writer.writeLine(
-          `    ${kebabToCamel(name)}PluginStub().then((stub) => ["${name}", stub]),`,
-        );
-      }
-      writer.writeLine('  ]);');
-      writer.writeLine(
-        '  resolve(stubEntries.filter(entry => entry && supportsPlatform(entry[1])).reduce((acc, [name, plg]) => { acc[name] = plg; return acc; }, {}));',
-      );
-      writer.writeLine('  return await promise;');
+      writer.writeLine('  const entries = await Promise.all(pluginIds.map(async (id) => {');
+      writer.writeLine('    const stub = (await importPlugin(id))?.pluginStub;');
+      writer.writeLine("    return stub && isPluginSupported(stub) ? [id, stub] : null;");
+      writer.writeLine('  }));');
+      writer.writeLine('  return Object.fromEntries(entries.filter(Boolean));');
       writer.writeLine('};');
-      writer.blankLine();
     },
     { overwrite: true },
   );
 
   return src.getText();
 };
-
-function supportsPlatform({ platform }: { platform: string }) {
-  if (typeof platform !== 'number') return true;
-
-  const is = (globalThis as typeof globalThis & {
-    electronIs: typeof import('electron-is');
-  }).electronIs;
-
-  if (is.windows()) return (platform & Platform.Windows) !== 0;
-  if (is.macOS()) return (platform & Platform.macOS) !== 0;
-  if (is.linux()) return (platform & Platform.Linux) !== 0;
-  if (is.freebsd()) return (platform & Platform.Freebsd) !== 0;
-
-  // unknown platform
-  return false;
-}

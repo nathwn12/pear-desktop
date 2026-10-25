@@ -1,8 +1,9 @@
-import { deepmerge } from 'deepmerge-ts';
-import { rendererPlugins } from 'virtual:plugins';
+import { isPluginSupported, pluginIdsFor } from 'virtual:plugins';
 
 import { t } from '@/i18n';
 import { LoggerPrefix, startPlugin, stopPlugin } from '@/utils';
+
+import { getPluginDefinition, isPluginEnabled } from './plugin-metadata';
 
 import type { RendererContext } from '@/types/contexts';
 import type { PluginConfig, PluginDef } from '@/types/plugins';
@@ -45,8 +46,8 @@ export const forceUnloadRendererPlugin = async (id: string) => {
   delete unregisterStyleMap[id];
   delete loadedPluginMap[id];
 
-  const plugin = (await rendererPlugins())[id];
-  if (!plugin) return;
+  const plugin = await getPluginDefinition(id);
+  if (!plugin?.renderer || !isPluginSupported(plugin)) return;
 
   const hasStopped = await stopPlugin(id, plugin, {
     ctx: 'renderer',
@@ -69,8 +70,9 @@ export const forceUnloadRendererPlugin = async (id: string) => {
 };
 
 export const forceLoadRendererPlugin = async (id: string) => {
-  const plugin = (await rendererPlugins())[id];
-  if (!plugin) return;
+  const plugin = await getPluginDefinition(id);
+  // Mirrors the old `rendererPlugins()` filter: renderer plugins only.
+  if (!plugin?.renderer || !isPluginSupported(plugin)) return;
 
   const hasEvaled = await startPlugin(id, plugin, {
     ctx: 'renderer',
@@ -115,10 +117,10 @@ export const forceLoadRendererPlugin = async (id: string) => {
 export const loadAllRendererPlugins = async () => {
   const pluginConfigs = window.mainConfig.plugins.getPlugins();
 
-  for (const [pluginId, pluginDef] of Object.entries(await rendererPlugins())) {
-    const config = deepmerge(pluginDef.config, pluginConfigs[pluginId] ?? {});
-
-    if (config.enabled) {
+  // Only enabled plugin modules are imported, so disabled plugins never run
+  // their module-scope side effects.
+  for (const pluginId of pluginIdsFor('renderer')) {
+    if (await isPluginEnabled(pluginId, pluginConfigs)) {
       await forceLoadRendererPlugin(pluginId);
     } else {
       if (loadedPluginMap[pluginId]) {

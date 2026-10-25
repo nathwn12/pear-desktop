@@ -14,6 +14,7 @@ import {
   forceUnloadPreloadPlugin,
   loadAllPreloadPlugins,
 } from './loader/preload';
+import { injectRendererScript } from './utils/renderer-script';
 
 // @ts-expect-error dummy
 globalThis.customElements = { define() {} };
@@ -38,7 +39,7 @@ new MutationObserver((mutations, observer) => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-loadI18n().then(async () => {
+loadI18n(config.get('options.language') ?? 'en').then(async () => {
   await setLanguage(config.get('options.language') ?? 'en');
   await loadAllPreloadPlugins();
 });
@@ -84,26 +85,31 @@ contextBridge.exposeInMainWorld(
   process.env.ELECTRON_RENDERER_URL,
 );
 
-const [path, script] = ipcRenderer.sendSync('get-renderer-script') as [
-  string | null,
-  string,
-];
-let blocked = true;
-if (path) {
-  webFrame.executeJavaScriptInIsolatedWorld(
-    0,
-    [
-      {
-        code: script,
-        url: path,
-      },
-    ],
-    true,
-    () => (blocked = false),
-  );
-} else {
-  webFrame.executeJavaScript(script, true, () => (blocked = false));
-}
+const executeRendererScript = async () => {
+  const [path, script] = ipcRenderer.sendSync('get-renderer-script') as [
+    string | null,
+    string,
+  ];
 
-// HACK: Wait for the script to be executed
-while (blocked);
+  // HACK: wait for the script to be executed by awaiting webFrame's promise —
+  // the callback form could resolve twice, never resolve, or reject silently,
+  // and the old `while (blocked);` busy-wait then hung the preload.
+  await injectRendererScript(
+    {
+      executeInIsolatedWorld: (worldId, { code, url }) =>
+        webFrame.executeJavaScriptInIsolatedWorld(
+          worldId,
+          [{ code, url }],
+          true,
+        ),
+      executeJavaScript: (code) => webFrame.executeJavaScript(code, true),
+    },
+    { path, script },
+  );
+};
+
+// The preload body cannot await (it is CJS), but the failure must not vanish:
+// log it instead of leaving an unhandled rejection behind.
+executeRendererScript().catch((error: unknown) => {
+  console.error('[preload] renderer script execution failed', error);
+});

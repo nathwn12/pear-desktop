@@ -2,6 +2,8 @@ import { registerHooks } from 'node:module';
 
 import { expect, test } from '@playwright/test';
 
+import { virtualI18nStub } from '../../../test/virtual-i18n';
+
 import type { SyncedLyricsPluginConfig } from '../types';
 import type { RendererContext } from '@/types/contexts';
 import type { MusicPlayer } from '@/types/music-player';
@@ -14,10 +16,7 @@ import type { MusicPlayer } from '@/types/music-player';
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === 'virtual:i18n') {
-      return {
-        url: 'data:text/javascript,export const languageResources = async () => ({});',
-        shortCircuit: true,
-      };
+      return virtualI18nStub;
     }
     if (specifier.endsWith('?inline')) {
       return {

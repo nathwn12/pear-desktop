@@ -3,6 +3,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { test, expect } from '@playwright/test';
 
+import { virtualI18nStub } from '../../../test/virtual-i18n';
+
 /**
  * The panel's renderer entry pulls in a CSS `?inline` import and the i18n
  * barrel (which pulls `virtual:i18n`); stub both at the loader boundary so the
@@ -11,10 +13,7 @@ import { test, expect } from '@playwright/test';
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === 'virtual:i18n') {
-      return {
-        url: 'data:text/javascript,export const languageResources = async () => ({});',
-        shortCircuit: true,
-      };
+      return virtualI18nStub;
     }
     if (specifier.endsWith('?inline')) {
       return {

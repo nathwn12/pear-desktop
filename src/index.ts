@@ -26,8 +26,8 @@ import unhandled from 'electron-unhandled';
 import electronUpdater from 'electron-updater';
 import { deepEqual } from 'fast-equals';
 import { parse } from 'node-html-parser';
-import { languageResources } from 'virtual:i18n';
-import { allPlugins, mainPlugins } from 'virtual:plugins';
+import { languageCodes } from 'virtual:i18n';
+import { allPlugins, pluginIdsFor } from 'virtual:plugins';
 
 import * as config from '@/config';
 import { APPLICATION_NAME, loadI18n, setLanguage, t } from '@/i18n';
@@ -37,6 +37,7 @@ import {
   getAllLoadedMainPlugins,
   loadAllMainPlugins,
 } from '@/loader/main';
+import { getPluginStub } from '@/loader/plugin-metadata';
 import { refreshMenu, setApplicationMenu } from '@/menu';
 import musicPlayerCss from '@/music-player.css?inline';
 import { defaultAuthProxyConfig } from '@/plugins/auth-proxy-adapter/config';
@@ -47,6 +48,7 @@ import {
   handleProtocol,
   setupProtocolHandler,
 } from '@/providers/protocol-handler';
+import { createRendererWatchdog } from '@/providers/renderer-watchdog';
 import { setupSongInfo } from '@/providers/song-info';
 import { setUpTray } from '@/tray';
 import { LoggerPrefix } from '@/utils';
@@ -120,6 +122,11 @@ if (disableHardwareAcceleration) {
   app.disableHardwareAcceleration();
 }
 
+// Keep the renderer at full speed while it is backgrounded or occluded
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 // Apply disabled features
 app.commandLine.appendSwitch('disable-features', disabledFeatures.join(','));
 
@@ -157,26 +164,31 @@ function onClosed() {
   mainWindow = null;
 }
 
-ipcMain.handle('peard:get-main-plugin-names', async () =>
-  Object.keys(await mainPlugins()),
-);
+ipcMain.handle('peard:get-main-plugin-names', () => pluginIdsFor('backend'));
 
-const initHook = async (win: BrowserWindow) => {
-  const allPluginStubs = await allPlugins();
-
+const initHook = (win: BrowserWindow) => {
+  // Resolved lazily: nothing here may evaluate a plugin module before the page
+  // starts loading.
   ipcMain.handle(
     'peard:get-config',
-    (_, id: string) =>
+    async (_, id: string) =>
       deepmerge(
-        allPluginStubs[id].config ?? { enabled: false },
+        (await getPluginStub(id))?.config ?? { enabled: false },
         config.get(`plugins.${id}`) ?? {},
       ) as PluginConfig,
   );
-  ipcMain.handle('peard:set-config', (_, name: string, obj: object) =>
-    config.setPartial(`plugins.${name}`, obj, allPluginStubs[name].config),
+  ipcMain.handle('peard:set-config', async (_, name: string, obj: object) =>
+    config.setPartial(
+      `plugins.${name}`,
+      obj,
+      (await getPluginStub(name))?.config,
+    ),
   );
 
-  config.watch((newValue, oldValue) => {
+  const onConfigChange = async (
+    newValue: Record<string, unknown> | undefined,
+    oldValue: Record<string, unknown> | undefined,
+  ) => {
     const newPluginConfigList = (newValue?.plugins ?? {}) as Record<
       string,
       unknown
@@ -186,13 +198,14 @@ const initHook = async (win: BrowserWindow) => {
       unknown
     >;
 
-    Object.entries(newPluginConfigList).forEach(([id, newPluginConfig]) => {
+    for (const [id, newPluginConfig] of Object.entries(newPluginConfigList)) {
       const isEqual = deepEqual(oldPluginConfigList[id], newPluginConfig);
 
       if (!isEqual) {
         const oldConfig = oldPluginConfigList[id] as PluginConfig;
+        const pluginStub = await getPluginStub(id);
         const config = deepmerge(
-          allPluginStubs[id].config ?? { enabled: false },
+          pluginStub?.config ?? { enabled: false },
           newPluginConfig ?? {},
         ) as PluginConfig;
 
@@ -207,7 +220,7 @@ const initHook = async (win: BrowserWindow) => {
             forceUnloadMainPlugin(id, win);
           }
 
-          if (allPluginStubs[id]?.restartNeeded) {
+          if (pluginStub?.restartNeeded) {
             showNeedToRestartDialog(id);
           }
         }
@@ -224,6 +237,15 @@ const initHook = async (win: BrowserWindow) => {
 
         win.webContents.send('config-changed', id, config);
       }
+    }
+  };
+
+  config.watch((newValue, oldValue) => {
+    onConfigChange(
+      newValue as Record<string, unknown> | undefined,
+      oldValue as Record<string, unknown> | undefined,
+    ).catch((error) => {
+      console.error(LoggerPrefix, error);
     });
   });
 };
@@ -329,6 +351,12 @@ async function createMainWindow() {
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, '..', 'preload', 'preload.cjs'),
+      // Keep audio/visual work running while the window is hidden or occluded
+      backgroundThrottling: false,
+      // The app never uses the spell checker; skip downloading dictionaries
+      spellcheck: false,
+      // Ship V8 code cache so cold starts do not re-compile the renderer bundle
+      v8CacheOptions: 'code',
       ...(isTesting()
         ? undefined
         : {
@@ -342,7 +370,7 @@ async function createMainWindow() {
 
   const win = new BrowserWindow(electronWindowSettings);
 
-  await initHook(win);
+  initHook(win);
   initTheme(win);
 
   await loadAllMainPlugins(win);
@@ -450,6 +478,8 @@ async function createMainWindow() {
   app.on('render-process-gone', (_event, _webContents, details) => {
     showUnresponsiveDialog(win, details);
   });
+
+  attachRendererWatchdog(win);
 
   win.once('ready-to-show', () => {
     if (config.get('options.appVisible')) {
@@ -589,18 +619,18 @@ app.on('activate', async () => {
   }
 });
 
-const getDefaultLocale = async (locale: string) =>
-  Object.keys(await languageResources()).includes(locale) ? locale : null;
+const getDefaultLocale = (locale: string) =>
+  languageCodes.includes(locale) ? locale : null;
 
 app.whenReady().then(async () => {
   if (!config.get('options.language')) {
-    const locale = await getDefaultLocale(app.getLocale());
+    const locale = getDefaultLocale(app.getLocale());
     if (locale) {
       config.set('options.language', locale);
     }
   }
 
-  await loadI18n().then(async () => {
+  await loadI18n(config.get('options.language') ?? 'en').then(async () => {
     await setLanguage(config.get('options.language') ?? 'en');
     console.log(LoggerPrefix, t('main.console.i18n.loaded'));
   });
@@ -836,9 +866,29 @@ app.whenReady().then(async () => {
   }
 });
 
+/**
+ * Reports a stuck renderer to the existing dialog. Nothing here samples memory
+ * or reloads a window: a reload discards the queue and playback state, so
+ * restarting stays the explicit choice offered by the dialog.
+ */
+function attachRendererWatchdog(win: BrowserWindow) {
+  const watchdog = createRendererWatchdog({
+    notifyUnresponsive: () => showUnresponsiveDialog(win),
+    log: (message) => console.warn(LoggerPrefix, message),
+  });
+
+  win.on('unresponsive', () => {
+    watchdog.handleUnresponsive();
+  });
+
+  win.webContents.on('did-finish-load', () => {
+    watchdog.markRendererGeneration();
+  });
+}
+
 function showUnresponsiveDialog(
   win: BrowserWindow,
-  details: Electron.RenderProcessGoneDetails,
+  details?: Electron.RenderProcessGoneDetails,
 ) {
   if (details) {
     console.error(

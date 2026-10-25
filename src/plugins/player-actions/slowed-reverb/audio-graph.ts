@@ -1,32 +1,18 @@
-export interface AudioCanPlayDetail {
-  audioContext: AudioContext;
-  audioSource: MediaElementAudioSourceNode;
-}
+import {
+  getAudioGraphReady,
+  type AudioGraphReadyDetail,
+} from '@/providers/audio-graph-ready';
+
+export type AudioCanPlayDetail = AudioGraphReadyDetail;
 
 /**
- * The app announces its shared audio graph ("peard:audio-can-play") once the
- * player API is ready and again on every video load. A plugin only receives
- * those announcements while it is loaded, so enabling this plugin mid-song
- * would miss them and never wire reverb. Remember the latest announcement at
- * module scope so start() can adopt the graph immediately.
+ * The app's latest audio-graph announcement.
  *
- * Renderer-only module: index.ts references it exclusively from the renderer
- * context, which is stripped from main/preload builds, so this side effect is
- * tree-shaken there.
+ * The snapshot lives in the app (`@/providers/audio-graph-ready`), not in this
+ * module: plugin modules are imported lazily, so a listener registered here
+ * would miss the announcement that fired before the plugin was enabled
+ * mid-song. Reading the central snapshot works whenever the plugin loads.
  */
-let latestAudioDetail: AudioCanPlayDetail | null = null;
-
-document.addEventListener(
-  'peard:audio-can-play',
-  (event) => {
-    const detail = (event as CustomEvent<AudioCanPlayDetail>).detail;
-    if (detail?.audioContext && detail?.audioSource) {
-      latestAudioDetail = detail;
-    }
-  },
-  { passive: true },
-);
-
 export function getLatestAudioDetail(): AudioCanPlayDetail | null {
-  return latestAudioDetail;
+  return getAudioGraphReady();
 }

@@ -1,10 +1,16 @@
 import { deepmerge } from 'deepmerge-ts';
 import { type BrowserWindow, ipcMain } from 'electron';
-import { allPlugins, mainPlugins } from 'virtual:plugins';
+import { isPluginSupported, pluginIdsFor } from 'virtual:plugins';
 
 import * as config from '@/config';
 import { t } from '@/i18n';
 import { LoggerPrefix, startPlugin, stopPlugin } from '@/utils';
+
+import {
+  getPluginDefinition,
+  getPluginStub,
+  isPluginEnabled,
+} from './plugin-metadata';
 
 import type { BackendContext } from '@/types/contexts';
 import type { PluginConfig, PluginDef } from '@/types/plugins';
@@ -20,14 +26,14 @@ const createContext = (
 ): BackendContext<PluginConfig> => ({
   getConfig: async () =>
     deepmerge(
-      (await allPlugins())[id].config ?? { enabled: false },
+      (await getPluginStub(id))?.config ?? { enabled: false },
       config.get(`plugins.${id}`) ?? {},
     ) as PluginConfig,
   setConfig: async (newConfig) => {
     config.setPartial(
       `plugins.${id}`,
       newConfig,
-      (await allPlugins())[id].config,
+      (await getPluginStub(id))?.config,
     );
   },
 
@@ -98,8 +104,10 @@ export const forceLoadMainPlugin = async (
   id: string,
   win: BrowserWindow,
 ): Promise<void> => {
-  const plugin = (await mainPlugins())[id];
-  if (!plugin) return;
+  const plugin = await getPluginDefinition(id);
+  // Mirrors the old `mainPlugins()` filter: backend plugins only, and only on
+  // the platforms the plugin declares support for.
+  if (!plugin?.backend || !isPluginSupported(plugin)) return;
 
   try {
     const hasStarted = await startPlugin(id, plugin, {
@@ -135,12 +143,13 @@ export const loadAllMainPlugins = async (win: BrowserWindow) => {
   const pluginConfigs = config.plugins.getPlugins();
   const queue: Promise<void>[] = [];
 
-  for (const [plugin, pluginDef] of Object.entries(await mainPlugins())) {
-    const config = deepmerge(pluginDef.config, pluginConfigs[plugin] ?? {});
-    if (config.enabled) {
-      queue.push(forceLoadMainPlugin(plugin, win));
-    } else if (loadedPluginMap[plugin]) {
-      queue.push(forceUnloadMainPlugin(plugin, win));
+  // Only the plugins that are actually enabled (or were loaded before) are
+  // touched, so disabled plugin modules are never evaluated at startup.
+  for (const id of pluginIdsFor('backend')) {
+    if (await isPluginEnabled(id, pluginConfigs)) {
+      queue.push(forceLoadMainPlugin(id, win));
+    } else if (loadedPluginMap[id]) {
+      queue.push(forceUnloadMainPlugin(id, win));
     }
   }
 

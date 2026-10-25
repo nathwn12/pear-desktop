@@ -12,6 +12,42 @@ export type PluginConfig = {
   enabled: boolean;
 };
 
+/** Loads a plugin module, or nothing when `await import(...)` is unavailable. */
+export type PluginModuleLoader = () =>
+  | Promise<{ default?: { config?: PluginConfig } } | undefined>
+  | undefined;
+
+/**
+ * The single enabled-state policy, shared by the config facade and the loaders.
+ *
+ * 1. An explicitly stored `enabled` wins. `undefined` counts as not stored,
+ *    which is what merging with the stored config computed (the merge drops
+ *    undefined values, and persisted config can never contain one). For this
+ *    scalar key the merge and this rule are otherwise identical, so the merge
+ *    is never needed to answer it.
+ * 2. Otherwise the build-time default decides, when it is statically known.
+ * 3. Only an unknown default (`null`) loads the plugin to read `config.enabled`,
+ *    and a plugin without a config is disabled.
+ */
+export const resolvePluginEnabled = async (
+  defaultEnabled: boolean | null,
+  storedConfig: Partial<PluginConfig> | undefined,
+  loadPlugin: PluginModuleLoader,
+): Promise<boolean> => {
+  if (
+    storedConfig &&
+    Object.hasOwn(storedConfig, 'enabled') &&
+    storedConfig.enabled !== undefined
+  ) {
+    return Boolean(storedConfig.enabled);
+  }
+
+  if (defaultEnabled !== null) return defaultEnabled;
+
+  const plugin = await loadPlugin();
+  return Boolean(plugin?.default?.config?.enabled);
+};
+
 export type PluginLifecycleSimple<Context, This> = (
   this: This,
   ctx: Context,
